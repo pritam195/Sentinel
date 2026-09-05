@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Environment files
+.env
+*.env
+backend/.env
+
+# Build & bundle artifacts
+dist/
+build/
+
+# Do not push ADR
+ADR.md
+
+# Logs
+*.log
+backend/logs/
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
