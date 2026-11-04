@@ -1,10 +1,14 @@
 import RuleBasedAdvisor from './RuleBasedAdvisor.js';
+import NaiveRuleAdvisor from './NaiveRuleAdvisor.js';
+import DaysOfSupplyRuleAdvisor from './DaysOfSupplyRuleAdvisor.js';
 import AIAdvisor from './AIAdvisor.js';
 import Config from '../models/Config.js';
 
 // Strategy instances
 const strategies = {
   'rule-based': new RuleBasedAdvisor(),
+  'naive-rule': new NaiveRuleAdvisor(),
+  'days-of-supply': new DaysOfSupplyRuleAdvisor(),
   'ai': new AIAdvisor()
 };
 

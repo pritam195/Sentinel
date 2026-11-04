@@ -112,3 +112,16 @@ The 105-scenario suite incorporates the following mandatory edge case distributi
 3. **Wilson Score Intervals**: Every agreement percentage must be reported with 95% Wilson confidence intervals.
 4. **Paired Statistical Comparison**: Differences between rule and AI models must be evaluated using McNemar's paired test with continuity correction, reporting the two-tailed $p$-value and whether the null hypothesis (equivalent accuracy) is rejected at $\alpha = 0.05$.
 
+---
+
+## 8. Formal Human Sign-Off
+
+I confirm that I have reviewed the benchmark scenarios, synthetic labeling methodology, and rubric constraints in this document.
+
+- **Reviewer Signature**: __________________________________________________
+- **Printed Name**:       __________________________________________________
+- **Title / Domain Role**: __________________________________________________
+- **Date**:               __________________________________________________
+- **Sign-Off Status**:    [ ] APPROVED   [ ] REJECTED   [ ] REVISIONS REQUIRED
+
+

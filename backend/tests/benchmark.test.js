@@ -1,13 +1,28 @@
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { execSync } from 'child_process';
 import { performance } from 'perf_hooks';
 import AIAdvisor from '../strategies/AIAdvisor.js';
-import RuleBasedAdvisor from '../strategies/RuleBasedAdvisor.js';
+import NaiveRuleAdvisor from '../strategies/NaiveRuleAdvisor.js';
+import DaysOfSupplyRuleAdvisor from '../strategies/DaysOfSupplyRuleAdvisor.js';
 import { benchmarkScenarios } from './data/benchmarkScenarios.js';
 
 dotenv.config();
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/sentinel';
+
+function getGitCommit() {
+  try {
+    return execSync('git rev-parse HEAD', { encoding: 'utf8' }).trim();
+  } catch (e) {
+    return 'unknown';
+  }
+}
 
 // Error function approximation (Abramowitz & Stegun 7.1.26)
 function erf(x) {
@@ -26,12 +41,9 @@ function normalCDF(z) {
 
 /**
  * 95% Wilson Score Confidence Interval for a binomial proportion
- * @param {number} x - Count of successes
- * @param {number} n - Total trials
- * @param {number} z - Standard normal critical value (default 1.95996 for 95%)
  */
 export function calculateWilsonCI(x, n, z = 1.95996) {
-  if (n === 0) return { lower: 0, upper: 0, str: '[0.0%, 0.0%]' };
+  if (n === 0) return { lower: 0, upper: 0, pct: 0, str: '[0.0%, 0.0%]' };
   const p = x / n;
   const denominator = 1 + (z * z) / n;
   const center = (p + (z * z) / (2 * n)) / denominator;
@@ -39,8 +51,8 @@ export function calculateWilsonCI(x, n, z = 1.95996) {
   const lower = Math.max(0, center - margin);
   const upper = Math.min(1, center + margin);
   return {
-    lower,
-    upper,
+    lower: Number(lower.toFixed(4)),
+    upper: Number(upper.toFixed(4)),
     pct: Number((p * 100).toFixed(1)),
     str: `[${(lower * 100).toFixed(1)}%, ${(upper * 100).toFixed(1)}%]`
   };
@@ -48,9 +60,6 @@ export function calculateWilsonCI(x, n, z = 1.95996) {
 
 /**
  * McNemar's Paired Test with Edwards Continuity Correction
- * Evaluates whether the disagreement between RuleBased and AI models is statistically distinguishable
- * @param {number} b - Model 1 (Rule) correct, Model 2 (AI) incorrect
- * @param {number} c - Model 1 (Rule) incorrect, Model 2 (AI) correct
  */
 export function calculateMcNemarTest(b, c) {
   const discordant = b + c;
@@ -62,12 +71,11 @@ export function calculateMcNemarTest(b, c) {
       chi2: 0,
       pValue: 1.0,
       distinguishable: false,
-      summary: 'No discordant pairs observed (Rule and AI agreed on all instances).'
+      summary: 'No discordant pairs (equivalent agreement)'
     };
   }
 
   const diff = Math.abs(b - c);
-  // Continuity-corrected chi-squared statistic
   const chi2 = Math.pow(Math.max(0, diff - 1), 2) / discordant;
   const z = Math.sqrt(chi2);
   const pValue = 2 * (1 - normalCDF(z));
@@ -81,13 +89,13 @@ export function calculateMcNemarTest(b, c) {
     pValue: Number(pValue.toFixed(4)),
     distinguishable,
     summary: distinguishable
-      ? `Statistically distinguishable difference (chi2=${chi2.toFixed(2)}, p=${pValue.toFixed(4)} < 0.05)`
-      : `Statistically indistinguishable difference (chi2=${chi2.toFixed(2)}, p=${pValue.toFixed(4)} >= 0.05)`
+      ? `Distinguishable (chi2=${chi2.toFixed(2)}, p=${pValue.toFixed(4)} < 0.05)`
+      : `Indistinguishable (chi2=${chi2.toFixed(2)}, p=${pValue.toFixed(4)} >= 0.05)`
   };
 }
 
 /**
- * Calculate p50, p95, p99 percentiles from an array of numbers
+ * Calculate p50, p95, p99 percentiles from array of numbers
  */
 export function calculatePercentiles(latencies) {
   if (!latencies || latencies.length === 0) return { p50: 0, p95: 0, p99: 0 };
@@ -104,19 +112,43 @@ export function calculatePercentiles(latencies) {
 }
 
 /**
+ * Deterministic PRNG split (Mulberry32) by fixed seed
+ * Partitions 105 scenarios into 32 dev (30.5%) and 73 held-out (69.5%)
+ */
+export function partitionScenarios(scenarios, seed = 42) {
+  let s = seed;
+  const rng = () => {
+    s |= 0; s = s + 0x6D2B79F5 | 0;
+    let t = Math.imul(s ^ s >>> 15, 1 | s);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+
+  const indices = scenarios.map((_, i) => i);
+  for (let i = indices.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [indices[i], indices[j]] = [indices[j], indices[i]];
+  }
+
+  const devCount = Math.round(scenarios.length * 0.30); // 32
+  const devSet = new Set(indices.slice(0, devCount));
+
+  return scenarios.map((scenario, index) => ({
+    ...scenario,
+    split: devSet.has(index) ? 'dev' : 'held-out'
+  }));
+}
+
+/**
  * Deterministic Mock Gemini LLM Provider
- * Implements Ground Rule 3: Gemini calls must be mockable in tests so tests are deterministic.
- * Simulates realistic LLM responses without requiring external network connectivity or API key.
  */
 function createDeterministicMockLLM() {
   return async function mockLLM(prompt) {
-    // Inject deterministic micro-delay to simulate LLM network call
     await new Promise(r => setTimeout(r, 2));
 
     const isPricing = prompt.includes('RECOMMENDED PRICING FORMAT') || prompt.includes('recommendedPrice');
 
     if (isPricing) {
-      // Parse current price, stock, threshold, velocity
       const currentPriceMatch = prompt.match(/Current price:\s*([0-9.]+)/i);
       const stockLevelMatch = prompt.match(/Stock:\s*([0-9]+)/i);
       const thresholdMatch = prompt.match(/reorder threshold:\s*([0-9]+)/i);
@@ -132,7 +164,6 @@ function createDeterministicMockLLM() {
 
       if (prompt.includes('INVENTORY_LOW') || stock < threshold) {
         direction = 'INCREASE';
-        // Deterministic realistic LLM markup: 8% to 11% based on deficit severity
         const severity = Math.max(0, 1 - stock / threshold);
         const markup = 0.07 + 0.04 * severity;
         recommendedPrice = Math.round(current * (1 + markup) * 100) / 100;
@@ -151,14 +182,13 @@ function createDeterministicMockLLM() {
         reasoning: `Deterministic LLM simulation: ${direction} price from $${current} to $${recommendedPrice} (stock: ${stock}, threshold: ${threshold}, vel: ${velocity}).`
       });
     } else {
-      // Reorder prompt
       const stockMatch = prompt.match(/Stock:\s*([0-9]+)/i);
       const thresholdMatch = prompt.match(/reorder threshold:\s*([0-9]+)/i);
       const velocityMatch = prompt.match(/demand velocity:\s*([0-9.]+)/i);
 
       const stock = stockMatch ? parseInt(stockMatch[1], 10) : 10;
       const threshold = thresholdMatch ? parseInt(thresholdMatch[1], 10) : 20;
-      const velocity = velocityMatch ? parseFloat(velocityMatch[1]) : 2.0;
+      const velocity = velocityMatch ? parseFloat(velocityMatch[1], 10) : 2.0;
 
       let recommendedQuantity = 0;
       if (prompt.includes('DEMAND_SPIKE') || velocity > 6.0) {
@@ -182,51 +212,60 @@ function createDeterministicMockLLM() {
 }
 
 export async function runBenchmark(options = {}) {
-  const isLive = options.live || process.env.BENCHMARK_LIVE === 'true' || process.argv.includes('--live');
+  const mode = process.env.BENCHMARK_MODE || (process.env.BENCHMARK_LIVE === 'true' || process.argv.includes('--live') ? 'live' : 'mock');
+  const isLive = mode === 'live';
+  const modelName = isLive ? (process.env.LLM_MODEL || 'gemini-2.5-flash') : 'gemini-2.5-flash (deterministic mock)';
+  const gitCommit = getGitCommit();
+  const timestamp = new Date().toISOString();
 
   console.log('===============================================================');
   console.log('       SENTINEL 105-SCENARIO MERCHANDISING BENCHMARK HARNESS   ');
-  console.log(`       Mode: ${isLive ? 'LIVE GOOGLE GEMINI API' : 'DETERMINISTIC MOCKABLE LLM (CI/OFFLINE)'}`);
+  console.log(`       Mode: ${mode.toUpperCase()} | Model: ${modelName}`);
+  console.log(`       Git Commit: ${gitCommit} | Timestamp: ${timestamp}`);
   console.log('       Label Provenance: Rubric-Derived (docs/benchmark-labeling.md)');
   console.log('===============================================================\n');
 
-  const ruleAdvisor = new RuleBasedAdvisor();
+  // Instantiate the three advisors
+  const naiveAdvisor = new NaiveRuleAdvisor();
+  const daysOfSupplyAdvisor = new DaysOfSupplyRuleAdvisor({
+    leadTimeDays: 7,
+    reviewPeriodDays: 7,
+    safetyStockDays: 3
+  });
   const aiAdvisor = new AIAdvisor(
     isLive ? {} : { callLLM: createDeterministicMockLLM() }
   );
 
-  const N = benchmarkScenarios.length;
-  console.log(`Evaluating ${N} labeled scenarios across 5 categories:`);
-  console.log(' - ELECTRONICS (21), APPAREL (21), HOME (21), BEAUTY (21), GROCERY (21)');
-  console.log(' - Including zero-stock, extreme spikes, razor-thin margins, and dead stock\n');
+  const partitioned = partitionScenarios(benchmarkScenarios, 42);
+  const N = partitioned.length;
+  const devScenarios = partitioned.filter(s => s.split === 'dev');
+  const heldOutScenarios = partitioned.filter(s => s.split === 'held-out');
 
-  // Metrics tracking
-  let ruleDirMatches = 0;
-  let rulePriceMatches = 0;
-  let ruleQtyMatches = 0;
-  let ruleProximityTotal = 0;
+  console.log(`Partitioned ${N} scenarios: ${devScenarios.length} dev (30.5%), ${heldOutScenarios.length} held-out (69.5%)`);
+  console.log('Evaluating 3 Advisors: [NaiveRule, DaysOfSupplyRule, AIAdvisor]\n');
 
-  let aiDirMatches = 0;
-  let aiPriceMatches = 0;
-  let aiQtyMatches = 0;
-  let aiProximityTotal = 0;
+  // Rate limiter throttle for live API calls (15 calls/min = 4000ms delay)
+  const throttleMs = isLive ? (options.throttleMs || 4000) : 0;
 
-  // Paired contingency counters for McNemar's test
-  // b: Rule matches, AI does not
-  // c: Rule does not match, AI matches
-  let dir_b = 0, dir_c = 0;
-  let price_b = 0, price_c = 0;
-  let qty_b = 0, qty_c = 0;
+  // Tracker for evaluation results
+  const evaluations = [];
 
-  // Per-call latency tracking in milliseconds
-  const rulePricingLatencies = [];
-  const ruleReorderLatencies = [];
-  const aiPricingLatencies = [];
-  const aiReorderLatencies = [];
+  let aiPricingAnswered = 0;
+  let aiPricingFellBack = 0;
+  let aiReorderAnswered = 0;
+  let aiReorderFellBack = 0;
 
-  const comparisonRows = [];
+  const latencies = {
+    naivePricing: [],
+    naiveReorder: [],
+    dosPricing: [],
+    dosReorder: [],
+    aiPricing: [],
+    aiReorder: []
+  };
 
-  for (const s of benchmarkScenarios) {
+  for (let i = 0; i < N; i++) {
+    const s = partitioned[i];
     const mockProduct = {
       _id: new mongoose.Types.ObjectId(),
       sku: `BENCH-${s.id}`,
@@ -239,184 +278,296 @@ export async function runBenchmark(options = {}) {
       demandVelocity: s.demandVelocity
     };
 
-    // 1. Evaluate Rule-Based Advisor
-    const t0RulePrice = performance.now();
-    const rulePricing = await ruleAdvisor.suggestPricing(mockProduct, s.categoryAverageVelocity, s.triggerReason);
-    rulePricingLatencies.push(performance.now() - t0RulePrice);
+    // 1. Evaluate NaiveRule
+    const t0NaiveP = performance.now();
+    const naiveP = await naiveAdvisor.suggestPricing(mockProduct, s.categoryAverageVelocity, s.triggerReason);
+    latencies.naivePricing.push(performance.now() - t0NaiveP);
 
-    const t0RuleReorder = performance.now();
-    const ruleReorder = await ruleAdvisor.suggestReorder(mockProduct, s.triggerReason);
-    ruleReorderLatencies.push(performance.now() - t0RuleReorder);
+    const t0NaiveR = performance.now();
+    const naiveR = await naiveAdvisor.suggestReorder(mockProduct, s.triggerReason);
+    latencies.naiveReorder.push(performance.now() - t0NaiveR);
 
-    // Rule scoring
-    const ruleDirOk = rulePricing.direction === s.expert.direction;
-    const rulePriceOk = rulePricing.recommendedPrice >= s.expert.minPrice && rulePricing.recommendedPrice <= s.expert.maxPrice;
-    const ruleQtyOk = ruleReorder.recommendedQuantity >= s.expert.minQty && ruleReorder.recommendedQuantity <= s.expert.maxQty;
-    const ruleProx = Math.max(0, 1 - Math.abs(rulePricing.recommendedPrice - s.expert.expectedPrice) / s.expert.expectedPrice);
+    // 2. Evaluate DaysOfSupplyRule
+    const t0DosP = performance.now();
+    const dosP = await daysOfSupplyAdvisor.suggestPricing(mockProduct, s.categoryAverageVelocity, s.triggerReason);
+    latencies.dosPricing.push(performance.now() - t0DosP);
 
-    if (ruleDirOk) ruleDirMatches++;
-    if (rulePriceOk) rulePriceMatches++;
-    if (ruleQtyOk) ruleQtyMatches++;
-    ruleProximityTotal += ruleProx;
+    const t0DosR = performance.now();
+    const dosR = await daysOfSupplyAdvisor.suggestReorder(mockProduct, s.triggerReason);
+    latencies.dosReorder.push(performance.now() - t0DosR);
 
-    // 2. Evaluate AI Advisor
-    let aiPricing, aiReorder;
-    const t0AiPrice = performance.now();
-    try {
-      aiPricing = await aiAdvisor.suggestPricing(mockProduct, s.categoryAverageVelocity, s.triggerReason);
-    } catch (e) {
-      aiPricing = await ruleAdvisor.suggestPricing(mockProduct, s.categoryAverageVelocity, s.triggerReason);
+    // 3. Evaluate AIAdvisor (throttle in live mode)
+    if (throttleMs > 0 && i > 0) {
+      await new Promise(r => setTimeout(r, throttleMs));
     }
-    aiPricingLatencies.push(performance.now() - t0AiPrice);
 
-    const t0AiReorder = performance.now();
+    let aiP = null;
+    let aiPFellBack = false;
+    const t0AiP = performance.now();
     try {
-      aiReorder = await aiAdvisor.suggestReorder(mockProduct, s.triggerReason);
+      aiP = await aiAdvisor.suggestPricing(mockProduct, s.categoryAverageVelocity, s.triggerReason);
+      if (aiP.isFallback) aiPFellBack = true;
     } catch (e) {
-      aiReorder = await ruleAdvisor.suggestReorder(mockProduct, s.triggerReason);
+      aiPFellBack = true;
+      aiP = await naiveAdvisor.suggestPricing(mockProduct, s.categoryAverageVelocity, s.triggerReason);
     }
-    aiReorderLatencies.push(performance.now() - t0AiReorder);
+    latencies.aiPricing.push(performance.now() - t0AiP);
 
-    // AI scoring
-    const aiDirOk = aiPricing.direction === s.expert.direction;
-    const aiPriceOk = aiPricing.recommendedPrice >= s.expert.minPrice && aiPricing.recommendedPrice <= s.expert.maxPrice;
-    const aiQtyOk = aiReorder.recommendedQuantity >= s.expert.minQty && aiReorder.recommendedQuantity <= s.expert.maxQty;
-    const aiProx = Math.max(0, 1 - Math.abs(aiPricing.recommendedPrice - s.expert.expectedPrice) / s.expert.expectedPrice);
+    if (aiPFellBack) {
+      aiPricingFellBack++;
+    } else {
+      aiPricingAnswered++;
+    }
 
-    if (aiDirOk) aiDirMatches++;
-    if (aiPriceOk) aiPriceMatches++;
-    if (aiQtyOk) aiQtyMatches++;
-    aiProximityTotal += aiProx;
+    if (throttleMs > 0) {
+      await new Promise(r => setTimeout(r, throttleMs));
+    }
 
-    // McNemar discordant tally
-    if (ruleDirOk && !aiDirOk) dir_b++;
-    if (!ruleDirOk && aiDirOk) dir_c++;
+    let aiR = null;
+    let aiRFellBack = false;
+    const t0AiR = performance.now();
+    try {
+      aiR = await aiAdvisor.suggestReorder(mockProduct, s.triggerReason);
+      if (aiR.isFallback) aiRFellBack = true;
+    } catch (e) {
+      aiRFellBack = true;
+      aiR = await naiveAdvisor.suggestReorder(mockProduct, s.triggerReason);
+    }
+    latencies.aiReorder.push(performance.now() - t0AiR);
 
-    if (rulePriceOk && !aiPriceOk) price_b++;
-    if (!rulePriceOk && aiPriceOk) price_c++;
+    if (aiRFellBack) {
+      aiReorderFellBack++;
+    } else {
+      aiReorderAnswered++;
+    }
 
-    if (ruleQtyOk && !aiQtyOk) qty_b++;
-    if (!ruleQtyOk && aiQtyOk) qty_c++;
+    // Score Naive
+    const naiveDirOk = naiveP.direction === s.expert.direction;
+    const naivePriceOk = naiveP.recommendedPrice >= s.expert.minPrice && naiveP.recommendedPrice <= s.expert.maxPrice;
+    const naiveQtyOk = naiveR.recommendedQuantity >= s.expert.minQty && naiveR.recommendedQuantity <= s.expert.maxQty;
+    const naiveProx = Math.max(0, 1 - Math.abs(naiveP.recommendedPrice - s.expert.expectedPrice) / s.expert.expectedPrice);
 
-    comparisonRows.push({
+    // Score DaysOfSupply
+    const dosDirOk = dosP.direction === s.expert.direction;
+    const dosPriceOk = dosP.recommendedPrice >= s.expert.minPrice && dosP.recommendedPrice <= s.expert.maxPrice;
+    const dosQtyOk = dosR.recommendedQuantity >= s.expert.minQty && dosR.recommendedQuantity <= s.expert.maxQty;
+    const dosProx = Math.max(0, 1 - Math.abs(dosP.recommendedPrice - s.expert.expectedPrice) / s.expert.expectedPrice);
+
+    // Score AI (only recorded if answered)
+    const aiDirOk = !aiPFellBack && (aiP.direction === s.expert.direction);
+    const aiPriceOk = !aiPFellBack && (aiP.recommendedPrice >= s.expert.minPrice && aiP.recommendedPrice <= s.expert.maxPrice);
+    const aiQtyOk = !aiRFellBack && (aiR.recommendedQuantity >= s.expert.minQty && aiR.recommendedQuantity <= s.expert.maxQty);
+    const aiProx = !aiPFellBack ? Math.max(0, 1 - Math.abs(aiP.recommendedPrice - s.expert.expectedPrice) / s.expert.expectedPrice) : null;
+
+    evaluations.push({
       id: s.id,
       name: s.name,
       category: s.category,
-      trigger: s.triggerReason,
-      rule: {
-        dir: rulePricing.direction,
-        price: rulePricing.recommendedPrice,
-        qty: ruleReorder.recommendedQuantity,
-        dirOk: ruleDirOk,
-        priceOk: rulePriceOk,
-        qtyOk: ruleQtyOk
-      },
-      ai: {
-        dir: aiPricing.direction,
-        price: aiPricing.recommendedPrice,
-        qty: aiReorder.recommendedQuantity,
-        dirOk: aiDirOk,
-        priceOk: aiPriceOk,
-        qtyOk: aiQtyOk
-      }
+      split: s.split,
+      expert: s.expert,
+      naive: { dir: naiveP.direction, price: naiveP.recommendedPrice, qty: naiveR.recommendedQuantity, dirOk: naiveDirOk, priceOk: naivePriceOk, qtyOk: naiveQtyOk, prox: naiveProx },
+      dos: { dir: dosP.direction, price: dosP.recommendedPrice, qty: dosR.recommendedQuantity, dirOk: dosDirOk, priceOk: dosPriceOk, qtyOk: dosQtyOk, prox: dosProx },
+      ai: { dir: aiP.direction, price: aiP.recommendedPrice, qty: aiR.recommendedQuantity, fellBack: aiPFellBack || aiRFellBack, pFellBack: aiPFellBack, rFellBack: aiRFellBack, dirOk: aiDirOk, priceOk: aiPriceOk, qtyOk: aiQtyOk, prox: aiProx }
     });
 
     if (s.id % 21 === 0 || s.id === 1 || s.id === N) {
-      console.log(`[Scenario #${String(s.id).padStart(3, '0')}] ${s.name.substring(0, 36).padEnd(38)} | Expert: ${s.expert.direction.padEnd(8)} $${s.expert.expectedPrice.toFixed(2).padStart(7)} | Rule: ${rulePricing.direction.padEnd(8)} $${rulePricing.recommendedPrice.toFixed(2).padStart(7)} (${rulePriceOk ? 'OK' : 'FAIL'}) | AI: ${aiPricing.direction.padEnd(8)} $${aiPricing.recommendedPrice.toFixed(2).padStart(7)} (${aiPriceOk ? 'OK' : 'FAIL'})`);
+      console.log(`[Scenario #${String(s.id).padStart(3, '0')}] [${s.split.toUpperCase()}] ${s.name.substring(0, 28).padEnd(30)} | Exp Price: $${s.expert.expectedPrice.toFixed(2).padStart(7)} | Naive: $${naiveP.recommendedPrice.toFixed(2).padStart(7)} (${naivePriceOk ? 'OK' : 'FAIL'}) | DoS Qty: ${dosR.recommendedQuantity} (${dosQtyOk ? 'OK' : 'FAIL'}) | AI Qty: ${aiR.recommendedQuantity} (${aiQtyOk ? 'OK' : 'FAIL'})`);
     }
   }
 
-  // Calculate Wilson Confidence Intervals
-  const ruleDirCI = calculateWilsonCI(ruleDirMatches, N);
-  const aiDirCI = calculateWilsonCI(aiDirMatches, N);
+  // Helper to score a set of evaluations
+  function scoreSubset(rows) {
+    const total = rows.length;
+    let naiveDir = 0, naivePrice = 0, naiveQty = 0, naiveProxSum = 0;
+    let dosDir = 0, dosPrice = 0, dosQty = 0, dosProxSum = 0;
 
-  const rulePriceCI = calculateWilsonCI(rulePriceMatches, N);
-  const aiPriceCI = calculateWilsonCI(aiPriceMatches, N);
+    let aiPAnswered = 0, aiDir = 0, aiPrice = 0, aiProxSum = 0;
+    let aiRAnswered = 0, aiQty = 0;
 
-  const ruleQtyCI = calculateWilsonCI(ruleQtyMatches, N);
-  const aiQtyCI = calculateWilsonCI(aiQtyMatches, N);
+    // Discordant counters for McNemar:
+    // Pair A: Naive vs DoS
+    let n_dos_dir_b = 0, n_dos_dir_c = 0;
+    let n_dos_price_b = 0, n_dos_price_c = 0;
+    let n_dos_qty_b = 0, n_dos_qty_c = 0;
 
-  // Mean Proximity Scores
-  const ruleMeanProx = Number(((ruleProximityTotal / N) * 100).toFixed(1));
-  const aiMeanProx = Number(((aiProximityTotal / N) * 100).toFixed(1));
+    // Pair B: Naive vs AI
+    let n_ai_dir_b = 0, n_ai_dir_c = 0;
+    let n_ai_price_b = 0, n_ai_price_c = 0;
+    let n_ai_qty_b = 0, n_ai_qty_c = 0;
 
-  // Paired McNemar Tests
-  const dirMcNemar = calculateMcNemarTest(dir_b, dir_c);
-  const priceMcNemar = calculateMcNemarTest(price_b, price_c);
-  const qtyMcNemar = calculateMcNemarTest(qty_b, qty_c);
+    // Pair C: DoS vs AI
+    let dos_ai_dir_b = 0, dos_ai_dir_c = 0;
+    let dos_ai_price_b = 0, dos_ai_price_c = 0;
+    let dos_ai_qty_b = 0, dos_ai_qty_c = 0;
 
-  // Latency Percentiles
-  const rulePriceLatencies = calculatePercentiles(rulePricingLatencies);
-  const ruleQtyLatencies = calculatePercentiles(ruleReorderLatencies);
-  const aiPriceLatencies = calculatePercentiles(aiPricingLatencies);
-  const aiQtyLatencies = calculatePercentiles(aiReorderLatencies);
+    for (const r of rows) {
+      if (r.naive.dirOk) naiveDir++;
+      if (r.naive.priceOk) naivePrice++;
+      if (r.naive.qtyOk) naiveQty++;
+      naiveProxSum += r.naive.prox;
 
-  // Print Comprehensive Summary
+      if (r.dos.dirOk) dosDir++;
+      if (r.dos.priceOk) dosPrice++;
+      if (r.dos.qtyOk) dosQty++;
+      dosProxSum += r.dos.prox;
+
+      // Naive vs DoS
+      if (r.naive.dirOk && !r.dos.dirOk) n_dos_dir_b++;
+      if (!r.naive.dirOk && r.dos.dirOk) n_dos_dir_c++;
+      if (r.naive.priceOk && !r.dos.priceOk) n_dos_price_b++;
+      if (!r.naive.priceOk && r.dos.priceOk) n_dos_price_c++;
+      if (r.naive.qtyOk && !r.dos.qtyOk) n_dos_qty_b++;
+      if (!r.naive.qtyOk && r.dos.qtyOk) n_dos_qty_c++;
+
+      // AI Pricing
+      if (!r.ai.pFellBack) {
+        aiPAnswered++;
+        if (r.ai.dirOk) aiDir++;
+        if (r.ai.priceOk) aiPrice++;
+        aiProxSum += r.ai.prox;
+
+        // Discordant vs Naive
+        if (r.naive.dirOk && !r.ai.dirOk) n_ai_dir_b++;
+        if (!r.naive.dirOk && r.ai.dirOk) n_ai_dir_c++;
+        if (r.naive.priceOk && !r.ai.priceOk) n_ai_price_b++;
+        if (!r.naive.priceOk && r.ai.priceOk) n_ai_price_c++;
+
+        // Discordant vs DoS
+        if (r.dos.dirOk && !r.ai.dirOk) dos_ai_dir_b++;
+        if (!r.dos.dirOk && r.ai.dirOk) dos_ai_dir_c++;
+        if (r.dos.priceOk && !r.ai.priceOk) dos_ai_price_b++;
+        if (!r.dos.priceOk && r.ai.priceOk) dos_ai_price_c++;
+      }
+
+      // AI Reorder
+      if (!r.ai.rFellBack) {
+        aiRAnswered++;
+        if (r.ai.qtyOk) aiQty++;
+
+        if (r.naive.qtyOk && !r.ai.qtyOk) n_ai_qty_b++;
+        if (!r.naive.qtyOk && r.ai.qtyOk) n_ai_qty_c++;
+
+        if (r.dos.qtyOk && !r.ai.qtyOk) dos_ai_qty_b++;
+        if (!r.dos.qtyOk && r.ai.qtyOk) dos_ai_qty_c++;
+      }
+    }
+
+    return {
+      total,
+      naive: {
+        dir: calculateWilsonCI(naiveDir, total),
+        price: calculateWilsonCI(naivePrice, total),
+        qty: calculateWilsonCI(naiveQty, total),
+        prox: Number(((naiveProxSum / total) * 100).toFixed(1)),
+        counts: { dir: naiveDir, price: naivePrice, qty: naiveQty }
+      },
+      dos: {
+        dir: calculateWilsonCI(dosDir, total),
+        price: calculateWilsonCI(dosPrice, total),
+        qty: calculateWilsonCI(dosQty, total),
+        prox: Number(((dosProxSum / total) * 100).toFixed(1)),
+        counts: { dir: dosDir, price: dosPrice, qty: dosQty }
+      },
+      ai: {
+        pAnswered: aiPAnswered,
+        rAnswered: aiRAnswered,
+        dir: calculateWilsonCI(aiDir, aiPAnswered),
+        price: calculateWilsonCI(aiPrice, aiPAnswered),
+        qty: calculateWilsonCI(aiQty, aiRAnswered),
+        prox: aiPAnswered > 0 ? Number(((aiProxSum / aiPAnswered) * 100).toFixed(1)) : 0,
+        counts: { dir: aiDir, price: aiPrice, qty: aiQty }
+      },
+      mcnemar: {
+        naive_vs_dos: {
+          dir: calculateMcNemarTest(n_dos_dir_b, n_dos_dir_c),
+          price: calculateMcNemarTest(n_dos_price_b, n_dos_price_c),
+          qty: calculateMcNemarTest(n_dos_qty_b, n_dos_qty_c)
+        },
+        naive_vs_ai: {
+          dir: calculateMcNemarTest(n_ai_dir_b, n_ai_dir_c),
+          price: calculateMcNemarTest(n_ai_price_b, n_ai_price_c),
+          qty: calculateMcNemarTest(n_ai_qty_b, n_ai_qty_c)
+        },
+        dos_vs_ai: {
+          dir: calculateMcNemarTest(dos_ai_dir_b, dos_ai_dir_c),
+          price: calculateMcNemarTest(dos_ai_price_b, dos_ai_price_c),
+          qty: calculateMcNemarTest(dos_ai_qty_b, dos_ai_qty_c)
+        }
+      }
+    };
+  }
+
+  const fullScore = scoreSubset(evaluations);
+  const devScore = scoreSubset(evaluations.filter(e => e.split === 'dev'));
+  const heldOutScore = scoreSubset(evaluations.filter(e => e.split === 'held-out'));
+
+  // Calculate Latency Percentiles
+  const latencySummary = {
+    naivePricing: calculatePercentiles(latencies.naivePricing),
+    naiveReorder: calculatePercentiles(latencies.naiveReorder),
+    dosPricing: calculatePercentiles(latencies.dosPricing),
+    dosReorder: calculatePercentiles(latencies.dosReorder),
+    aiPricing: calculatePercentiles(latencies.aiPricing),
+    aiReorder: calculatePercentiles(latencies.aiReorder)
+  };
+
+  const resultsJSON = {
+    metadata: {
+      mode,
+      model: modelName,
+      gitCommit,
+      timestamp,
+      totalScenarios: N,
+      devCount: devScenarios.length,
+      heldOutCount: heldOutScenarios.length,
+      aiPricingCalls: { total: N, answered: aiPricingAnswered, fellBack: aiPricingFellBack },
+      aiReorderCalls: { total: N, answered: aiReorderAnswered, fellBack: aiReorderFellBack }
+    },
+    full: fullScore,
+    dev: devScore,
+    heldOut: heldOutScore,
+    latency: latencySummary
+  };
+
+  // Write JSON results file
+  const resultsDir = path.resolve(__dirname, '../logs');
+  if (!fs.existsSync(resultsDir)) {
+    fs.mkdirSync(resultsDir, { recursive: true });
+  }
+  const jsonPath = path.join(resultsDir, 'benchmark-results.json');
+  fs.writeFileSync(jsonPath, JSON.stringify(resultsJSON, null, 2));
+  console.log(`Saved benchmark results JSON to: ${jsonPath}`);
+
+  // Display Console Output
   console.log('\n===============================================================');
-  console.log('               BENCHMARK ACCURACY & WILSON 95% CI              ');
+  console.log(`      BENCHMARK RESULTS: HELD-OUT SPLIT (N=${heldOutScenarios.length})`);
   console.log('===============================================================');
-  console.log(`Metric 1: DIRECTIONAL AGREEMENT (N=${N}):`);
-  console.log(`  Rule-Based Advisor: ${ruleDirMatches}/${N} (${ruleDirCI.pct}%) | 95% Wilson CI: ${ruleDirCI.str}`);
-  console.log(`  AI Advisor:         ${aiDirMatches}/${N} (${aiDirCI.pct}%) | 95% Wilson CI: ${aiDirCI.str}`);
-  console.log(`  Paired McNemar:     b=${dir_b}, c=${dir_c} | ${dirMcNemar.summary}`);
+  console.log(`1. Directional Agreement:`);
+  console.log(`   - NaiveRule:    ${heldOutScore.naive.counts.dir}/${heldOutScore.total} (${heldOutScore.naive.dir.pct}%) ${heldOutScore.naive.dir.str}`);
+  console.log(`   - DaysOfSupply: ${heldOutScore.dos.counts.dir}/${heldOutScore.total} (${heldOutScore.dos.dir.pct}%) ${heldOutScore.dos.dir.str}`);
+  console.log(`   - AIAdvisor:    ${heldOutScore.ai.counts.dir}/${heldOutScore.ai.pAnswered} (${heldOutScore.ai.dir.pct}%) ${heldOutScore.ai.dir.str}`);
+  console.log(`   - DoS vs AI McNemar: ${heldOutScore.mcnemar.dos_vs_ai.dir.summary}`);
 
-  console.log(`\nMetric 2: PRICE WINDOW ACCURACY (N=${N}):`);
-  console.log(`  Rule-Based Advisor: ${rulePriceMatches}/${N} (${rulePriceCI.pct}%) | 95% Wilson CI: ${rulePriceCI.str}`);
-  console.log(`  AI Advisor:         ${aiPriceMatches}/${N} (${aiPriceCI.pct}%) | 95% Wilson CI: ${aiPriceCI.str}`);
-  console.log(`  Paired McNemar:     b=${price_b}, c=${price_c} | ${priceMcNemar.summary}`);
+  console.log(`\n2. Price Window Accuracy:`);
+  console.log(`   - NaiveRule:    ${heldOutScore.naive.counts.price}/${heldOutScore.total} (${heldOutScore.naive.price.pct}%) ${heldOutScore.naive.price.str}`);
+  console.log(`   - DaysOfSupply: ${heldOutScore.dos.counts.price}/${heldOutScore.total} (${heldOutScore.dos.price.pct}%) ${heldOutScore.dos.price.str}`);
+  console.log(`   - AIAdvisor:    ${heldOutScore.ai.counts.price}/${heldOutScore.ai.pAnswered} (${heldOutScore.ai.price.pct}%) ${heldOutScore.ai.price.str}`);
+  console.log(`   - DoS vs AI McNemar: ${heldOutScore.mcnemar.dos_vs_ai.price.summary}`);
 
-  console.log(`\nMetric 3: PRICE PROXIMITY SCORE (Mean Closeness to Target):`);
-  console.log(`  Rule-Based Advisor: ${ruleMeanProx}%`);
-  console.log(`  AI Advisor:         ${aiMeanProx}%`);
+  console.log(`\n3. Price Proximity Score:`);
+  console.log(`   - NaiveRule:    ${heldOutScore.naive.prox}%`);
+  console.log(`   - DaysOfSupply: ${heldOutScore.dos.prox}%`);
+  console.log(`   - AIAdvisor:    ${heldOutScore.ai.prox}%`);
 
-  console.log(`\nMetric 4: REORDER QUANTITY ACCURACY (N=${N}):`);
-  console.log(`  Rule-Based Advisor: ${ruleQtyMatches}/${N} (${ruleQtyCI.pct}%) | 95% Wilson CI: ${ruleQtyCI.str}`);
-  console.log(`  AI Advisor:         ${aiQtyMatches}/${N} (${aiQtyCI.pct}%) | 95% Wilson CI: ${aiQtyCI.str}`);
-  console.log(`  Paired McNemar:     b=${qty_b}, c=${qty_c} | ${qtyMcNemar.summary}`);
-
-  console.log('\n===============================================================');
-  console.log('           PER-CALL LATENCY PROFILES (p50 / p95 / p99)         ');
-  console.log('===============================================================');
-  console.log('Rule-Based Advisor:');
-  console.log(`  - Pricing:  p50=${rulePriceLatencies.p50}ms, p95=${rulePriceLatencies.p95}ms, p99=${rulePriceLatencies.p99}ms`);
-  console.log(`  - Reorder:  p50=${ruleQtyLatencies.p50}ms, p95=${ruleQtyLatencies.p95}ms, p99=${ruleQtyLatencies.p99}ms`);
-  console.log(`AI Advisor (${isLive ? 'Live Gemini 2.5 Flash' : 'Deterministic Mock Provider'}):`);
-  console.log(`  - Pricing:  p50=${aiPriceLatencies.p50}ms, p95=${aiPriceLatencies.p95}ms, p99=${aiPriceLatencies.p99}ms`);
-  console.log(`  - Reorder:  p50=${aiQtyLatencies.p50}ms, p95=${aiQtyLatencies.p95}ms, p99=${aiQtyLatencies.p99}ms`);
+  console.log(`\n4. Reorder Quantity Accuracy:`);
+  console.log(`   - NaiveRule:    ${heldOutScore.naive.counts.qty}/${heldOutScore.total} (${heldOutScore.naive.qty.pct}%) ${heldOutScore.naive.qty.str}`);
+  console.log(`   - DaysOfSupply: ${heldOutScore.dos.counts.qty}/${heldOutScore.total} (${heldOutScore.dos.qty.pct}%) ${heldOutScore.dos.qty.str}`);
+  console.log(`   - AIAdvisor:    ${heldOutScore.ai.counts.qty}/${heldOutScore.ai.rAnswered} (${heldOutScore.ai.qty.pct}%) ${heldOutScore.ai.qty.str}`);
+  console.log(`   - Naive vs DoS McNemar: ${heldOutScore.mcnemar.naive_vs_dos.qty.summary}`);
+  console.log(`   - DoS vs AI McNemar:    ${heldOutScore.mcnemar.dos_vs_ai.qty.summary}`);
   console.log('===============================================================\n');
 
-  return {
-    totalScenarios: N,
-    isLive,
-    metrics: {
-      directionalAgreement: {
-        rule: { count: ruleDirMatches, pct: ruleDirCI.pct, ci: [ruleDirCI.lower, ruleDirCI.upper], str: ruleDirCI.str },
-        ai: { count: aiDirMatches, pct: aiDirCI.pct, ci: [aiDirCI.lower, aiDirCI.upper], str: aiDirCI.str },
-        mcnemar: dirMcNemar
-      },
-      priceAccuracy: {
-        rule: { count: rulePriceMatches, pct: rulePriceCI.pct, ci: [rulePriceCI.lower, rulePriceCI.upper], str: rulePriceCI.str },
-        ai: { count: aiPriceMatches, pct: aiPriceCI.pct, ci: [aiPriceCI.lower, aiPriceCI.upper], str: aiPriceCI.str },
-        mcnemar: priceMcNemar
-      },
-      priceProximity: {
-        rule: ruleMeanProx,
-        ai: aiMeanProx
-      },
-      reorderAccuracy: {
-        rule: { count: ruleQtyMatches, pct: ruleQtyCI.pct, ci: [ruleQtyCI.lower, ruleQtyCI.upper], str: ruleQtyCI.str },
-        ai: { count: aiQtyMatches, pct: aiQtyCI.pct, ci: [aiQtyCI.lower, aiQtyCI.upper], str: aiQtyCI.str },
-        mcnemar: qtyMcNemar
-      }
-    },
-    latency: {
-      rulePricing: rulePriceLatencies,
-      ruleReorder: ruleQtyLatencies,
-      aiPricing: aiPriceLatencies,
-      aiReorder: aiQtyLatencies
-    },
-    comparisonRows
-  };
+  return resultsJSON;
 }
 
 // Allow direct execution

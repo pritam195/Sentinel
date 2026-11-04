@@ -117,14 +117,33 @@ All performance figures, reliability rates, and benchmark comparisons are measur
 
 ### 2. 105-Scenario Merchandising Benchmark Summary
 
-Evaluated across 105 scenarios in 5 categories (`ELECTRONICS`, `APPAREL`, `HOME`, `BEAUTY`, `GROCERY`) against objective economic rubric labels (`docs/benchmark-labeling.md`):
+Evaluated across 105 scenarios partitioned into **32 development (30.5%)** and **73 held-out (69.5%)** by a fixed deterministic seed (`seed=42`). Results compare three distinct advisors:
+1. **NaiveRule**: Static threshold-based baseline ($\text{reorder quantity} = \max(0, 2 \times \text{threshold} - \text{stock})$).
+2. **DaysOfSupplyRule**: Standard periodic-review inventory control theory ($L=7\text{d}, R=7\text{d}, S_s=3\text{d}$ buffer; order-up-to level $S = \lceil 17 \times \text{velocity} \rceil - \text{stock}$).
+3. **AI Advisor**: LLM architecture evaluated strictly on answered scenarios (mock mode: `gemini-2.5-flash (mock)`; git commit `2f29a76`).
 
-| Evaluation Metric | Rule-Based Advisor | AI Advisor (Gemini Architecture) | Statistical Significance (McNemar Paired Test) |
-|---|---|---|---|
-| **Directional Agreement** | **105/105 (100.0%)**<br>95% Wilson CI: [96.5%, 100.0%] | **103/105 (98.1%)**<br>95% Wilson CI: [93.3%, 99.5%] | $\chi^2 = 0.50, p = 0.4795$<br>**Statistically indistinguishable** ($p \ge 0.05$) |
-| **Price Accuracy (Acceptable Window)** | **100/105 (95.2%)**<br>95% Wilson CI: [89.3%, 97.9%] | **98/105 (93.3%)**<br>95% Wilson CI: [86.9%, 96.7%] | $\chi^2 = 0.50, p = 0.4795$<br>**Statistically indistinguishable** ($p \ge 0.05$) |
-| **Mean Price Proximity** | **98.6%** | **98.7%** | Mean absolute difference: 0.1% |
-| **Reorder Quantity Accuracy** | **38/105 (36.2%)**<br>95% Wilson CI: [27.6%, 45.7%] | **88/105 (83.8%)**<br>95% Wilson CI: [75.6%, 89.6%] | $\chi^2 = 48.02, p < 0.0001$<br>**Statistically distinguishable** ($p < 0.05$) |
+> [!NOTE]
+> **Methodology & Provenance Notice**:
+> - Scenarios are synthetic retail merchandising archetypes.
+> - Ground truth labels are derived from the retail economic rubric in `docs/benchmark-labeling.md` and are pending human expert sign-off.
+> - The 100% directional agreement score represents a ceiling effect inherent in coarse 3-class directional heuristics (`INCREASE` / `DECREASE` / `HOLD`), which limits what directional agreement alone can reveal about pricing quality.
+> - **Empirical Finding**: On the held-out split, the AI Advisor does **NOT** outperform the textbook `DaysOfSupplyRule` advisor ($\chi^2 = 0.00, p = 1.0000 \ge 0.05$). Rather, both inventory theory and AI substantially outperform the naive static rule on replenishment sizing because they dynamically factor demand velocity into protection periods.
+
+#### Held-Out Split Performance ($N = 73$ Scenarios)
+
+| Evaluation Metric | NaiveRule Baseline | DaysOfSupplyRule (Inventory Theory) | AI Advisor (Answered Calls) | Pairwise McNemar Test (DoS vs. AI) |
+|---|---|---|---|---|
+| **Directional Agreement** | **73/73 (100.0%)**<br>[95.0%, 100.0%] | **73/73 (100.0%)**<br>[95.0%, 100.0%] | **71/73 (97.3%)**<br>[90.5%, 99.2%] | $\chi^2 = 0.50, p = 0.4795$<br>**Statistically indistinguishable** ($p \ge 0.05$) |
+| **Price Accuracy (Acceptable Window)** | **68/73 (93.2%)**<br>[84.9%, 97.0%] | **68/73 (93.2%)**<br>[84.9%, 97.0%] | **66/73 (90.4%)**<br>[81.5%, 95.3%] | $\chi^2 = 0.50, p = 0.4795$<br>**Statistically indistinguishable** ($p \ge 0.05$) |
+| **Mean Price Proximity** | **98.5%** | **98.5%** | **98.6%** | Mean absolute difference: 0.1% |
+| **Reorder Quantity Accuracy** | **16/73 (21.9%)**<br>[14.0%, 32.7%] | **60/73 (82.2%)**<br>[71.9%, 89.3%] | **48/56 (85.7%)**\*<br>[74.3%, 92.6%] | $\chi^2 = 0.00, p = 1.0000$<br>**Statistically indistinguishable** ($p \ge 0.05$) |
+
+*\*Header Note: For AI reorder, 56 scenarios were answered and 17 fell back on dead stock under the integer schema constraint.*
+
+#### Development Split Performance ($N = 32$ Scenarios)
+- **Directional Agreement**: NaiveRule 32/32 (100%), DaysOfSupply 32/32 (100%), AIAdvisor 32/32 (100%)
+- **Price Accuracy**: NaiveRule 32/32 (100%), DaysOfSupply 32/32 (100%), AIAdvisor 32/32 (100%)
+- **Reorder Quantity Accuracy**: NaiveRule 6/32 (18.8%), DaysOfSupply 24/32 (75.0%), AIAdvisor 15/22 (68.2%) (DoS vs AI $\chi^2 = 0.50, p = 0.4795$)
 
 ### 3. Per-Call Latency Profile
 
