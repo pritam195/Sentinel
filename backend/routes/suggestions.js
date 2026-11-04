@@ -4,6 +4,7 @@ import ReorderSuggestion from '../models/ReorderSuggestion.js';
 import Product from '../models/Product.js';
 import { recordInventorySnapshot } from '../services/inventorySnapshots.js';
 import { expirePendingSuggestions } from '../services/recommendationLoop.js';
+import { authenticateJWT, requireRole, ROLES } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -33,7 +34,8 @@ router.get('/pricing-suggestions', async (req, res) => {
 });
 
 // PATCH /pricing-suggestions/:id
-router.patch('/pricing-suggestions/:id', async (req, res) => {
+// Requires MERCHANDISER or ADMIN role; records acting user ID
+router.patch('/pricing-suggestions/:id', authenticateJWT, requireRole(ROLES.MERCHANDISER, ROLES.ADMIN), async (req, res) => {
   try {
     const { status } = req.body;
     if (!['ACCEPTED', 'REJECTED'].includes(status)) {
@@ -59,6 +61,8 @@ router.patch('/pricing-suggestions/:id', async (req, res) => {
       return res.status(400).json({ error: `Suggestion already processed with status: ${suggestion.status}` });
     }
 
+    const actingUserId = req.user?.userId || 'unknown';
+
     if (status === 'ACCEPTED') {
       const product = await Product.findById(suggestion.productId);
       if (!product) return res.status(404).json({ error: 'Product not found' });
@@ -70,6 +74,7 @@ router.patch('/pricing-suggestions/:id', async (req, res) => {
 
       if (versionChanged || priceChanged || dateChanged) {
         suggestion.status = 'STALE';
+        suggestion.actedBy = actingUserId;
         await suggestion.save();
         await restoreProductStatusWhenResolved(product);
         await product.save();
@@ -80,14 +85,16 @@ router.patch('/pricing-suggestions/:id', async (req, res) => {
       }
 
       suggestion.status = status;
+      suggestion.actedBy = actingUserId;
       await suggestion.save();
 
       product.currentPrice = suggestion.recommendedPrice;
-      product.priceHistory.push({ price: suggestion.recommendedPrice });
+      product.priceHistory.push({ price: suggestion.recommendedPrice, changedBy: actingUserId });
       await restoreProductStatusWhenResolved(product);
       await product.save();
     } else {
       suggestion.status = status;
+      suggestion.actedBy = actingUserId;
       await suggestion.save();
 
       const product = await Product.findById(suggestion.productId);
@@ -117,7 +124,8 @@ router.get('/reorder-suggestions', async (req, res) => {
 });
 
 // PATCH /reorder-suggestions/:id
-router.patch('/reorder-suggestions/:id', async (req, res) => {
+// Requires MERCHANDISER or ADMIN role; records acting user ID
+router.patch('/reorder-suggestions/:id', authenticateJWT, requireRole(ROLES.MERCHANDISER, ROLES.ADMIN), async (req, res) => {
   try {
     const { status } = req.body;
     if (!['ACCEPTED', 'REJECTED'].includes(status)) {
@@ -143,6 +151,8 @@ router.patch('/reorder-suggestions/:id', async (req, res) => {
       return res.status(400).json({ error: `Suggestion already processed with status: ${suggestion.status}` });
     }
 
+    const actingUserId = req.user?.userId || 'unknown';
+
     if (status === 'ACCEPTED') {
       const product = await Product.findById(suggestion.productId);
       if (!product) return res.status(404).json({ error: 'Product not found' });
@@ -154,6 +164,7 @@ router.patch('/reorder-suggestions/:id', async (req, res) => {
 
       if (versionChanged || stockChanged || dateChanged) {
         suggestion.status = 'STALE';
+        suggestion.actedBy = actingUserId;
         await suggestion.save();
         await restoreProductStatusWhenResolved(product);
         await product.save();
@@ -164,14 +175,16 @@ router.patch('/reorder-suggestions/:id', async (req, res) => {
       }
 
       suggestion.status = status;
+      suggestion.actedBy = actingUserId;
       await suggestion.save();
 
       product.stockLevel += suggestion.recommendedQuantity;
       await restoreProductStatusWhenResolved(product);
       await product.save();
-      await recordInventorySnapshot(product, 'REORDER_ACCEPTED');
+      await recordInventorySnapshot(product, 'REORDER_ACCEPTED', actingUserId);
     } else {
       suggestion.status = status;
+      suggestion.actedBy = actingUserId;
       await suggestion.save();
 
       const product = await Product.findById(suggestion.productId);

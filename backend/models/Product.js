@@ -13,7 +13,8 @@ const productSchema = new mongoose.Schema({
   minMarginPercent: { type: Number, required: false, min: 0, default: 0 },
   priceHistory: [{ 
     price: Number, 
-    date: { type: Date, default: Date.now } 
+    date: { type: Date, default: Date.now },
+    changedBy: { type: String, required: false, default: null }
   }]
 }, { timestamps: true });
 

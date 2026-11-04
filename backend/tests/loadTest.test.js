@@ -115,8 +115,8 @@ export async function runLoadAndScaleTest(targetProductCount = 520, numOrderSimu
   await Product.deleteMany({ sku: { $regex: /^SKU-/ } });
   await PricingSuggestion.deleteMany({});
   await ReorderSuggestion.deleteMany({});
-  await InventorySnapshot.deleteMany({});
-  await AdvisorLog.deleteMany({});
+  await InventorySnapshot.collection.deleteMany({});
+  await AdvisorLog.collection.deleteMany({});
 
   const generatedData = generate500Products(targetProductCount);
   const seedStartTime = performance.now();

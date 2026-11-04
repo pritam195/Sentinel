@@ -1,0 +1,315 @@
+import mongoose from 'mongoose';
+import dotenv from 'dotenv';
+import express from 'express';
+import http from 'http';
+import { signToken, ROLES } from '../middleware/auth.js';
+import suggestionRoutes from '../routes/suggestions.js';
+import configRoutes from '../routes/config.js';
+import authRoutes from '../routes/auth.js';
+import Product from '../models/Product.js';
+import PricingSuggestion from '../models/PricingSuggestion.js';
+import ReorderSuggestion from '../models/ReorderSuggestion.js';
+import InventorySnapshot from '../models/InventorySnapshot.js';
+import AdvisorLog from '../models/AdvisorLog.js';
+
+dotenv.config();
+
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/sentinel';
+
+// Create test express app
+const app = express();
+app.use(express.json());
+app.use('/auth', authRoutes);
+app.use('/', suggestionRoutes);
+app.use('/config', configRoutes);
+
+export async function runAuthAndAuditTests() {
+  console.log('===============================================================');
+  console.log('          SENTINEL AUTH & AUDIT INTEGRITY TEST HARNESS         ');
+  console.log('===============================================================');
+  if (mongoose.connection.readyState === 0) {
+    await mongoose.connect(MONGO_URI);
+  }
+
+  const server = http.createServer(app);
+  await new Promise(r => server.listen(0, r));
+  const port = server.address().port;
+  const baseUrl = `http://localhost:${port}`;
+
+  let totalTests = 0;
+  let passedTests = 0;
+
+  function assert(condition, message) {
+    totalTests++;
+    if (condition) {
+      console.log(`  [PASS] ${message}`);
+      passedTests++;
+    } else {
+      console.error(`  [FAIL] ${message}`);
+      throw new Error(`Assertion failed: ${message}`);
+    }
+  }
+
+  // Helper to make real HTTP requests to the test server
+  async function callRoute(method, path, body = {}, token = null) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetch(`${baseUrl}${path}`, {
+      method,
+      headers,
+      body: ['GET', 'HEAD'].includes(method) ? undefined : JSON.stringify(body)
+    });
+    const data = await res.json().catch(() => ({}));
+    return { status: res.status, data };
+  }
+
+  try {
+    // Create test tokens
+    const viewerToken = signToken({ userId: 'usr_viewer_99', role: ROLES.VIEWER, name: 'Viewer Bob' });
+    const merchToken = signToken({ userId: 'usr_merch_42', role: ROLES.MERCHANDISER, name: 'Merch Alice' });
+    const adminToken = signToken({ userId: 'usr_admin_01', role: ROLES.ADMIN, name: 'Admin Root' });
+    const invalidToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.invalid.signature';
+
+    // Setup test product and suggestions
+    await Product.deleteMany({ sku: { $regex: /^AUTH-/ } });
+    const testProduct = await Product.create({
+      sku: 'AUTH-TEST-SKU-A-' + Date.now(),
+      name: 'Auth Protected Camera A',
+      category: 'ELECTRONICS',
+      currentPrice: 400.00,
+      costPrice: 200.00,
+      stockLevel: 10,
+      reorderThreshold: 20,
+      demandVelocity: 2
+    });
+
+    const reorderProduct = await Product.create({
+      sku: 'AUTH-TEST-SKU-B-' + Date.now(),
+      name: 'Auth Protected Camera B',
+      category: 'ELECTRONICS',
+      currentPrice: 300.00,
+      costPrice: 150.00,
+      stockLevel: 10,
+      reorderThreshold: 20,
+      demandVelocity: 2
+    });
+
+    const testPricing = await PricingSuggestion.create({
+      productId: testProduct._id,
+      currentPrice: 400.00,
+      recommendedPrice: 440.00,
+      direction: 'INCREASE',
+      confidence: 0.85,
+      reasoning: 'Protect scarce inventory',
+      status: 'PENDING',
+      triggerReason: 'INVENTORY_LOW',
+      productVersion: testProduct.__v ?? 0,
+      productUpdatedAt: testProduct.updatedAt,
+      expiresAt: new Date(Date.now() + 86400000)
+    });
+
+    const testReorder = await ReorderSuggestion.create({
+      productId: reorderProduct._id,
+      currentStock: 10,
+      recommendedQuantity: 30,
+      suggestedLeadTimeDays: 7,
+      confidence: 0.8,
+      reasoning: 'Stock replenishment',
+      status: 'PENDING',
+      triggerReason: 'INVENTORY_LOW',
+      productVersion: reorderProduct.__v ?? 0,
+      productUpdatedAt: reorderProduct.updatedAt,
+      expiresAt: new Date(Date.now() + 86400000)
+    });
+
+    // 1. Unauthenticated Requests
+    console.log('\n1. TESTING UNAUTHENTICATED REQUESTS (401 UNAUTHORIZED)...');
+    const noTokenRes = await callRoute('PATCH', `/pricing-suggestions/${testPricing._id}`, { status: 'ACCEPTED' });
+    assert(noTokenRes.status === 401, `PATCH without token returns 401 (got ${noTokenRes.status})`);
+    assert(noTokenRes.data.error.includes('required'), 'Error indicates token is required');
+
+    const invalidTokenRes = await callRoute('PATCH', `/pricing-suggestions/${testPricing._id}`, { status: 'ACCEPTED' }, invalidToken);
+    assert(invalidTokenRes.status === 401, `PATCH with invalid signature returns 401 (got ${invalidTokenRes.status})`);
+    assert(invalidTokenRes.data.error.includes('Invalid or expired'), 'Error indicates invalid/expired token');
+
+    // 2. Unauthorized Role Access (403 Forbidden)
+    console.log('\n2. TESTING ROLE-BASED ACCESS CONTROL (403 FORBIDDEN)...');
+    const viewerPatchRes = await callRoute('PATCH', `/pricing-suggestions/${testPricing._id}`, { status: 'ACCEPTED' }, viewerToken);
+    assert(viewerPatchRes.status === 403, `VIEWER cannot accept pricing suggestion: returns 403 (got ${viewerPatchRes.status})`);
+    assert(viewerPatchRes.data.error.includes('not authorized'), 'Error indicates insufficient role permissions');
+
+    const viewerReorderRes = await callRoute('PATCH', `/reorder-suggestions/${testReorder._id}`, { status: 'ACCEPTED' }, viewerToken);
+    assert(viewerReorderRes.status === 403, `VIEWER cannot accept reorder suggestion: returns 403 (got ${viewerReorderRes.status})`);
+
+    const merchConfigRes = await callRoute('PATCH', '/config/strategy', { strategy: 'ai' }, merchToken);
+    assert(merchConfigRes.status === 403, `MERCHANDISER cannot change /config/strategy: returns 403 (got ${merchConfigRes.status})`);
+
+    const viewerConfigRes = await callRoute('PATCH', '/config/strategy', { strategy: 'ai' }, viewerToken);
+    assert(viewerConfigRes.status === 403, `VIEWER cannot change /config/strategy: returns 403 (got ${viewerConfigRes.status})`);
+
+    // 3. Authorized Access & Acting User ID Recording
+    console.log('\n3. TESTING AUTHORIZED ACCESS & ACTING USER ID AUDIT TRAIL...');
+    
+    // ADMIN changes config
+    const adminConfigRes = await callRoute('PATCH', '/config/strategy', { strategy: 'rule-based' }, adminToken);
+    assert(adminConfigRes.status === 200, `ADMIN successfully updates /config/strategy: 200 OK`);
+
+    // MERCHANDISER accepts pricing suggestion
+    const merchAcceptPricing = await callRoute('PATCH', `/pricing-suggestions/${testPricing._id}`, { status: 'ACCEPTED' }, merchToken);
+    assert(merchAcceptPricing.status === 200, `MERCHANDISER successfully accepts pricing suggestion: 200 OK`);
+    assert(merchAcceptPricing.data.status === 'ACCEPTED', 'Status transitioned to ACCEPTED');
+    assert(merchAcceptPricing.data.actedBy === 'usr_merch_42', `Acting user ID recorded on PricingSuggestion: got ${merchAcceptPricing.data.actedBy}`);
+
+    // Check product priceHistory recorded acting user ID
+    const updatedProduct = await Product.findById(testProduct._id);
+    const latestPriceEntry = updatedProduct.priceHistory.slice(-1)[0];
+    assert(latestPriceEntry.changedBy === 'usr_merch_42', `Product priceHistory recorded changedBy: got ${latestPriceEntry.changedBy}`);
+
+    // ADMIN accepts reorder suggestion
+    const adminAcceptReorder = await callRoute('PATCH', `/reorder-suggestions/${testReorder._id}`, { status: 'ACCEPTED' }, adminToken);
+    assert(adminAcceptReorder.status === 200, `ADMIN successfully accepts reorder suggestion: 200 OK`);
+    assert(adminAcceptReorder.data.status === 'ACCEPTED', 'Status transitioned to ACCEPTED');
+    assert(adminAcceptReorder.data.actedBy === 'usr_admin_01', `Acting user ID recorded on ReorderSuggestion: got ${adminAcceptReorder.data.actedBy}`);
+
+    // Check snapshot audit recorded acting user ID
+    const latestSnapshot = await InventorySnapshot.findOne({ productId: reorderProduct._id, source: 'REORDER_ACCEPTED' }).sort({ createdAt: -1 });
+    assert(latestSnapshot !== null, 'InventorySnapshot created for REORDER_ACCEPTED');
+    assert(latestSnapshot.actedBy === 'usr_admin_01', `InventorySnapshot recorded actedBy = usr_admin_01 (got ${latestSnapshot?.actedBy})`);
+
+    // 4. Append-Only Integrity on InventorySnapshot (Throws on update/delete)
+    console.log('\n4. TESTING APPEND-ONLY GUARDS ON INVENTORYSNAPSHOT...');
+    const testSnapshot = await InventorySnapshot.create({
+      productId: testProduct._id,
+      stockLevel: 10,
+      demandVelocity: 2,
+      source: 'CREATED'
+    });
+
+    let updateOneErr = null;
+    try {
+      await InventorySnapshot.updateOne({ _id: testSnapshot._id }, { $set: { stockLevel: 999 } });
+    } catch (err) {
+      updateOneErr = err;
+    }
+    assert(updateOneErr !== null && updateOneErr.message.includes('append-only'), 'InventorySnapshot.updateOne() throws append-only error');
+
+    let updateManyErr = null;
+    try {
+      await InventorySnapshot.updateMany({ _id: testSnapshot._id }, { $set: { stockLevel: 999 } });
+    } catch (err) {
+      updateManyErr = err;
+    }
+    assert(updateManyErr !== null && updateManyErr.message.includes('append-only'), 'InventorySnapshot.updateMany() throws append-only error');
+
+    let deleteOneErr = null;
+    try {
+      await InventorySnapshot.deleteOne({ _id: testSnapshot._id });
+    } catch (err) {
+      deleteOneErr = err;
+    }
+    assert(deleteOneErr !== null && deleteOneErr.message.includes('append-only'), 'InventorySnapshot.deleteOne() throws append-only error');
+
+    let deleteManyErr = null;
+    try {
+      await InventorySnapshot.deleteMany({ _id: testSnapshot._id });
+    } catch (err) {
+      deleteManyErr = err;
+    }
+    assert(deleteManyErr !== null && deleteManyErr.message.includes('append-only'), 'InventorySnapshot.deleteMany() throws append-only error');
+
+    let findOneAndUpdateErr = null;
+    try {
+      await InventorySnapshot.findOneAndUpdate({ _id: testSnapshot._id }, { $set: { stockLevel: 999 } });
+    } catch (err) {
+      findOneAndUpdateErr = err;
+    }
+    assert(findOneAndUpdateErr !== null && findOneAndUpdateErr.message.includes('append-only'), 'InventorySnapshot.findOneAndUpdate() throws append-only error');
+
+    let docSaveErr = null;
+    try {
+      testSnapshot.stockLevel = 777;
+      await testSnapshot.save();
+    } catch (err) {
+      docSaveErr = err;
+    }
+    assert(docSaveErr !== null && docSaveErr.message.includes('append-only'), 'Existing InventorySnapshot doc.save() throws append-only error');
+
+    // 5. Append-Only Integrity on AdvisorLog (Throws on update/delete)
+    console.log('\n5. TESTING APPEND-ONLY GUARDS ON ADVISORLOG...');
+    const testLog = await AdvisorLog.create({
+      logType: 'AI_CALL',
+      productId: testProduct._id,
+      sku: testProduct.sku,
+      callType: 'pricing',
+      outcome: 'success',
+      latencyMs: 120
+    });
+
+    let logUpdateOneErr = null;
+    try {
+      await AdvisorLog.updateOne({ _id: testLog._id }, { $set: { outcome: 'tampered' } });
+    } catch (err) {
+      logUpdateOneErr = err;
+    }
+    assert(logUpdateOneErr !== null && logUpdateOneErr.message.includes('append-only'), 'AdvisorLog.updateOne() throws append-only error');
+
+    let logUpdateManyErr = null;
+    try {
+      await AdvisorLog.updateMany({ _id: testLog._id }, { $set: { outcome: 'tampered' } });
+    } catch (err) {
+      logUpdateManyErr = err;
+    }
+    assert(logUpdateManyErr !== null && logUpdateManyErr.message.includes('append-only'), 'AdvisorLog.updateMany() throws append-only error');
+
+    let logDeleteOneErr = null;
+    try {
+      await AdvisorLog.deleteOne({ _id: testLog._id });
+    } catch (err) {
+      logDeleteOneErr = err;
+    }
+    assert(logDeleteOneErr !== null && logDeleteOneErr.message.includes('append-only'), 'AdvisorLog.deleteOne() throws append-only error');
+
+    let logDeleteManyErr = null;
+    try {
+      await AdvisorLog.deleteMany({ _id: testLog._id });
+    } catch (err) {
+      logDeleteManyErr = err;
+    }
+    assert(logDeleteManyErr !== null && logDeleteManyErr.message.includes('append-only'), 'AdvisorLog.deleteMany() throws append-only error');
+
+    let logFindOneAndUpdateErr = null;
+    try {
+      await AdvisorLog.findOneAndUpdate({ _id: testLog._id }, { $set: { outcome: 'tampered' } });
+    } catch (err) {
+      logFindOneAndUpdateErr = err;
+    }
+    assert(logFindOneAndUpdateErr !== null && logFindOneAndUpdateErr.message.includes('append-only'), 'AdvisorLog.findOneAndUpdate() throws append-only error');
+
+    let logDocSaveErr = null;
+    try {
+      testLog.latencyMs = 999;
+      await testLog.save();
+    } catch (err) {
+      logDocSaveErr = err;
+    }
+    assert(logDocSaveErr !== null && logDocSaveErr.message.includes('append-only'), 'Existing AdvisorLog doc.save() throws append-only error');
+
+    console.log('\n===============================================================');
+    console.log(`AUTH & AUDIT TEST SUMMARY: ${passedTests}/${totalTests} PASSED (100.0%)`);
+    console.log('===============================================================\n');
+
+    return { totalTests, passedTests };
+  } finally {
+    await new Promise(r => server.close(r));
+  }
+}
+
+if (process.argv[1] && process.argv[1].endsWith('authAndAudit.test.js')) {
+  runAuthAndAuditTests()
+    .then(() => process.exit(0))
+    .catch((err) => {
+      console.error('Auth & Audit test failed:', err);
+      process.exit(1);
+    });
+}

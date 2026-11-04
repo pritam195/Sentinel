@@ -1,10 +1,11 @@
 import InventorySnapshot from '../models/InventorySnapshot.js';
 
-export async function recordInventorySnapshot(product, source) {
+export async function recordInventorySnapshot(product, source, actedBy = null) {
   return InventorySnapshot.create({
     productId: product._id,
     stockLevel: product.stockLevel,
     demandVelocity: product.demandVelocity,
-    source
+    source,
+    actedBy
   });
 }

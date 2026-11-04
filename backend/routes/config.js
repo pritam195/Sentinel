@@ -6,6 +6,7 @@ import {
   globalSemaphore,
   globalRetryHandler
 } from '../services/resilience.js';
+import { authenticateJWT, requireRole, ROLES } from '../middleware/auth.js';
 
 const router = express.Router();
 
@@ -23,7 +24,8 @@ router.get('/strategy', async (req, res) => {
 });
 
 // PATCH /config/strategy
-router.patch('/strategy', async (req, res) => {
+// Only ADMIN can change /config/strategy
+router.patch('/strategy', authenticateJWT, requireRole(ROLES.ADMIN), async (req, res) => {
   try {
     const {
       strategy,

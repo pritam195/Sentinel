@@ -64,7 +64,6 @@ export async function runGuardrailsTests() {
     demandVelocity: 0
   };
 
-  // Rule advisor with no triggers holds price, but let's test a hypothetical underpricing attempt
   const productBelowFloor = {
     ...productWithMargin,
     currentPrice: 55.00 // Under $60 floor
@@ -214,7 +213,8 @@ export async function runGuardrailsTests() {
   // Merchandiser attempts to ACCEPT stale suggestion
   const acceptReq = {
     params: { id: stalePricing._id.toString() },
-    body: { status: 'ACCEPTED' }
+    body: { status: 'ACCEPTED' },
+    user: { userId: 'usr_merch_01', role: 'MERCHANDISER' }
   };
 
   let resStatus = 0;
@@ -237,7 +237,8 @@ export async function runGuardrailsTests() {
     s => s.route && s.route.path === '/pricing-suggestions/:id' && s.route.methods.patch
   );
 
-  await patchPricingLayer.route.stack[0].handle(acceptReq, mockRes);
+  const pricingHandler = patchPricingLayer.route.stack.slice(-1)[0].handle;
+  await pricingHandler(acceptReq, mockRes);
 
   assert(resStatus === 409, `Rejected with HTTP 409 Conflict (observed status: ${resStatus})`);
   assert(resJson.error.includes('STALE'), 'Error message states suggestion was marked STALE');
@@ -283,8 +284,9 @@ export async function runGuardrailsTests() {
     json: (d) => { reorderResStatus = 200; reorderResJson = d; }
   };
 
-  await patchReorderLayer.route.stack[0].handle(
-    { params: { id: staleReorder._id.toString() }, body: { status: 'ACCEPTED' } },
+  const reorderHandler = patchReorderLayer.route.stack.slice(-1)[0].handle;
+  await reorderHandler(
+    { params: { id: staleReorder._id.toString() }, body: { status: 'ACCEPTED' }, user: { userId: 'usr_merch_01', role: 'MERCHANDISER' } },
     mockReorderRes
   );
 
@@ -323,8 +325,8 @@ export async function runGuardrailsTests() {
     json: (d) => { expStatus = 200; expJson = d; }
   };
 
-  await patchPricingLayer.route.stack[0].handle(
-    { params: { id: expiredSuggestion._id.toString() }, body: { status: 'ACCEPTED' } },
+  await pricingHandler(
+    { params: { id: expiredSuggestion._id.toString() }, body: { status: 'ACCEPTED' }, user: { userId: 'usr_merch_01', role: 'MERCHANDISER' } },
     mockExpRes
   );
 

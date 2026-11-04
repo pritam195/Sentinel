@@ -13,7 +13,8 @@ const reorderSuggestionSchema = new mongoose.Schema({
   fallbackReason: { type: String, default: null },
   productVersion: { type: Number, default: 0 },
   productUpdatedAt: { type: Date, required: false },
-  expiresAt: { type: Date, required: true, index: true }
+  expiresAt: { type: Date, required: true, index: true },
+  actedBy: { type: String, required: false, default: null }
 }, { timestamps: true });
 
 reorderSuggestionSchema.index(
