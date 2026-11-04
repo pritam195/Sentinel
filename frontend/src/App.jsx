@@ -3,6 +3,7 @@ import ProductList from './components/ProductList';
 import SuggestionsPanel from './components/SuggestionsPanel';
 import StrategyConfig from './components/StrategyConfig';
 import TickerStrip from './components/TickerStrip';
+import AuthModal from './components/AuthModal';
 import { API_BASE } from './config';
 import './index.css';
 
@@ -18,6 +19,17 @@ function App() {
   const [initialLoading, setInitialLoading] = useState(true);
   const [streamData, setStreamData] = useState(null);
   const [highlightedRowId, setHighlightedRowId] = useState(null);
+
+  // Authentication State
+  const [token, setToken] = useState(() => localStorage.getItem('sentinel_token') || null);
+  const [user, setUser] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('sentinel_user') || 'null');
+    } catch {
+      return null;
+    }
+  });
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
   const handleRowFlash = (id) => {
     setHighlightedRowId(id);
@@ -131,7 +143,6 @@ function App() {
   };
 
   const formatStreamedJSON = (text) => {
-    // Add basic syntax highlighting to the raw streaming JSON
     return text
       .replace(/"([^"]+)":/g, '<span style="color: var(--signal-blue)">"$1"</span>:')
       .replace(/: "([^"]*)"/g, ': <span style="color: var(--signal-green)">"$1"</span>')
@@ -145,7 +156,26 @@ function App() {
           <div className="wordmark">Sentinel</div>
         </div>
         <div className="header-actions">
-          <StrategyConfig config={config} fetchConfig={fetchConfig} setError={setError} />
+          <StrategyConfig 
+            config={config} 
+            fetchConfig={fetchConfig} 
+            setError={setError}
+            token={token}
+            user={user}
+            onRequireLogin={() => setIsAuthModalOpen(true)}
+          />
+
+          {user ? (
+            <div className="auth-header-pill">
+              <span className={`role-tag role-${user.role?.toLowerCase()}`}>{user.role}</span>
+              <span className="user-label">{user.name}</span>
+              <button className="auth-action-btn" onClick={() => setIsAuthModalOpen(true)}>Switch</button>
+            </div>
+          ) : (
+            <button className="login-header-btn" onClick={() => setIsAuthModalOpen(true)}>
+              Log In
+            </button>
+          )}
         </div>
       </header>
 
@@ -185,6 +215,9 @@ function App() {
             fetchAll={fetchAll}
             setError={setError}
             onRowFlash={handleRowFlash}
+            token={token}
+            user={user}
+            onRequireLogin={() => setIsAuthModalOpen(true)}
           />
         </div>
       </main>
@@ -205,6 +238,15 @@ function App() {
           </div>
         </div>
       )}
+
+      <AuthModal 
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        onLoginSuccess={(newToken, newUser) => {
+          setToken(newToken);
+          setUser(newUser);
+        }}
+      />
     </div>
   );
 }

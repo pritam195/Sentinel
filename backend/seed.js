@@ -4,6 +4,7 @@ import Product from './models/Product.js';
 import PricingSuggestion from './models/PricingSuggestion.js';
 import ReorderSuggestion from './models/ReorderSuggestion.js';
 import InventorySnapshot from './models/InventorySnapshot.js';
+import { seedDefaultUsers } from './models/User.js';
 
 dotenv.config();
 
@@ -37,6 +38,9 @@ async function seed() {
       source: 'CREATED'
     })));
     console.log('Inserted seed products.');
+
+    await seedDefaultUsers();
+    console.log('Seeded default authenticated users (admin, merchandiser, viewer).');
 
     process.exit(0);
   } catch (error) {

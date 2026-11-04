@@ -7,23 +7,46 @@ export default function SuggestionsPanel({
   activeStrategy = 'rule-based', 
   fetchAll, 
   setError, 
-  onRowFlash 
+  onRowFlash,
+  token,
+  user,
+  onRequireLogin
 }) {
   const [loadingIds, setLoadingIds] = useState({});
   const [expandedIds, setExpandedIds] = useState({});
   const [filterMode, setFilterMode] = useState('active'); // 'active' (matches activeStrategy) | 'all'
 
   const handleAction = async (type, item, actionStatus) => {
+    if (!token) {
+      if (onRequireLogin) onRequireLogin();
+      setError('Authentication required to review suggestions. Please log in as Merchandiser or Admin.');
+      return;
+    }
+
     setLoadingIds(prev => ({ ...prev, [item._id]: true }));
     const endpoint = type === 'pricing' ? 'pricing-suggestions' : 'reorder-suggestions';
     
     try {
       const res = await fetch(`${API_BASE}/${endpoint}/${item._id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({ status: actionStatus })
       });
-      if (!res.ok) throw new Error(`Failed to ${actionStatus} suggestion`);
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        if (res.status === 403) {
+          throw new Error(`Forbidden: Role '${user?.role || 'UNKNOWN'}' is not authorized to ${actionStatus} suggestions. Required: MERCHANDISER or ADMIN.`);
+        }
+        if (res.status === 409) {
+          throw new Error(`Staleness Conflict: Product changed since recommendation was drafted. Marked as STALE.`);
+        }
+        throw new Error(data.error || `Failed to ${actionStatus} suggestion`);
+      }
       
       // Trigger animations
       if (actionStatus === 'ACCEPTED' && onRowFlash) {

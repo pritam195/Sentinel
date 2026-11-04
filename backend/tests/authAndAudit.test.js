@@ -2,7 +2,8 @@ import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import express from 'express';
 import http from 'http';
-import { signToken, ROLES } from '../middleware/auth.js';
+import jwt from 'jsonwebtoken';
+import { signToken, JWT_SECRET, ROLES } from '../middleware/auth.js';
 import suggestionRoutes from '../routes/suggestions.js';
 import configRoutes from '../routes/config.js';
 import authRoutes from '../routes/auth.js';
@@ -11,6 +12,7 @@ import PricingSuggestion from '../models/PricingSuggestion.js';
 import ReorderSuggestion from '../models/ReorderSuggestion.js';
 import InventorySnapshot from '../models/InventorySnapshot.js';
 import AdvisorLog from '../models/AdvisorLog.js';
+import User, { seedDefaultUsers } from '../models/User.js';
 
 dotenv.config();
 
@@ -30,6 +32,8 @@ export async function runAuthAndAuditTests() {
   if (mongoose.connection.readyState === 0) {
     await mongoose.connect(MONGO_URI);
   }
+
+  await seedDefaultUsers();
 
   const server = http.createServer(app);
   await new Promise(r => server.listen(0, r));
@@ -61,16 +65,10 @@ export async function runAuthAndAuditTests() {
       body: ['GET', 'HEAD'].includes(method) ? undefined : JSON.stringify(body)
     });
     const data = await res.json().catch(() => ({}));
-    return { status: res.status, data };
+    return { status: res.status, data, headers: res.headers };
   }
 
   try {
-    // Create test tokens
-    const viewerToken = signToken({ userId: 'usr_viewer_99', role: ROLES.VIEWER, name: 'Viewer Bob' });
-    const merchToken = signToken({ userId: 'usr_merch_42', role: ROLES.MERCHANDISER, name: 'Merch Alice' });
-    const adminToken = signToken({ userId: 'usr_admin_01', role: ROLES.ADMIN, name: 'Admin Root' });
-    const invalidToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.invalid.signature';
-
     // Setup test product and suggestions
     await Product.deleteMany({ sku: { $regex: /^AUTH-/ } });
     const testProduct = await Product.create({
@@ -123,33 +121,106 @@ export async function runAuthAndAuditTests() {
       expiresAt: new Date(Date.now() + 86400000)
     });
 
-    // 1. Unauthenticated Requests
-    console.log('\n1. TESTING UNAUTHENTICATED REQUESTS (401 UNAUTHORIZED)...');
+    // 1. Unauthenticated & Invalid Token Requests
+    console.log('\n1. TESTING UNAUTHENTICATED & INVALID TOKEN REQUESTS (401 UNAUTHORIZED)...');
+    
+    // 1.1 No token
     const noTokenRes = await callRoute('PATCH', `/pricing-suggestions/${testPricing._id}`, { status: 'ACCEPTED' });
     assert(noTokenRes.status === 401, `PATCH without token returns 401 (got ${noTokenRes.status})`);
     assert(noTokenRes.data.error.includes('required'), 'Error indicates token is required');
 
-    const invalidTokenRes = await callRoute('PATCH', `/pricing-suggestions/${testPricing._id}`, { status: 'ACCEPTED' }, invalidToken);
-    assert(invalidTokenRes.status === 401, `PATCH with invalid signature returns 401 (got ${invalidTokenRes.status})`);
-    assert(invalidTokenRes.data.error.includes('Invalid or expired'), 'Error indicates invalid/expired token');
+    // 1.2 Expired token
+    const expiredToken = signToken(
+      { userId: 'usr_admin_01', role: ROLES.ADMIN, name: 'Admin Root' },
+      { expiresIn: '-10s' }
+    );
+    const expiredTokenRes = await callRoute('PATCH', `/pricing-suggestions/${testPricing._id}`, { status: 'ACCEPTED' }, expiredToken);
+    assert(expiredTokenRes.status === 401, `PATCH with expired token returns 401 (got ${expiredTokenRes.status})`);
+    assert(expiredTokenRes.data.error.toLowerCase().includes('expired'), 'Error message indicates token is expired');
 
-    // 2. Unauthorized Role Access (403 Forbidden)
-    console.log('\n2. TESTING ROLE-BASED ACCESS CONTROL (403 FORBIDDEN)...');
+    // 1.3 Tampered token (modified payload with original signature)
+    const validToken = signToken({ userId: 'usr_viewer_99', role: ROLES.VIEWER, name: 'Viewer Bob' });
+    const parts = validToken.split('.');
+    // Tamper the payload segment (change role to ADMIN)
+    const tamperedPayload = Buffer.from(JSON.stringify({ userId: 'usr_viewer_99', role: 'ADMIN', name: 'Viewer Bob' })).toString('base64url');
+    const tamperedToken = `${parts[0]}.${tamperedPayload}.${parts[2]}`;
+    const tamperedRes = await callRoute('PATCH', `/pricing-suggestions/${testPricing._id}`, { status: 'ACCEPTED' }, tamperedToken);
+    assert(tamperedRes.status === 401, `PATCH with tampered token returns 401 (got ${tamperedRes.status})`);
+    assert(tamperedRes.data.error.includes('Invalid or expired'), 'Error indicates token is invalid/tampered');
+
+    // 2. Authentication Flow & Role Lookup on POST /auth/login
+    console.log('\n2. TESTING AUTHENTICATION FLOW & SERVER-SIDE ROLE LOOKUP...');
+    
+    // 2.1 Valid merchandiser login
+    const merchLoginRes = await callRoute('POST', '/auth/login', {
+      username: 'merchandiser',
+      password: 'merchpassword123'
+    });
+    assert(merchLoginRes.status === 200, `POST /auth/login succeeds with status 200`);
+    assert(merchLoginRes.data.token !== undefined, 'Returns signed JWT token');
+    assert(merchLoginRes.data.user.role === ROLES.MERCHANDISER, `Server looked up role: got ${merchLoginRes.data.user.role}`);
+    const merchToken = merchLoginRes.data.token;
+
+    // 2.2 Attempt role escalation through request body (merchandiser trying to pass role: 'ADMIN')
+    const escalateRes = await callRoute('POST', '/auth/login', {
+      username: 'merchandiser',
+      password: 'merchpassword123',
+      role: 'ADMIN' // Malicious attempt to escalate role
+    });
+    assert(escalateRes.status === 200, 'Login request processed');
+    assert(escalateRes.data.user.role === ROLES.MERCHANDISER, 'Role escalation in request body rejected; server kept role MERCHANDISER');
+    const decodedEscalated = jwt.decode(escalateRes.data.token);
+    assert(decodedEscalated.role === ROLES.MERCHANDISER, 'Signed JWT payload role is MERCHANDISER, not ADMIN');
+
+    // 2.3 Invalid credentials
+    const badPassRes = await callRoute('POST', '/auth/login', {
+      username: 'merchandiser',
+      password: 'wrongpassword'
+    });
+    assert(badPassRes.status === 401, `Invalid password returns 401 Unauthorized (got ${badPassRes.status})`);
+
+    // 2.4 Dev token endpoint disabled by default
+    const devTokenRes = await callRoute('POST', '/auth/dev-token', { role: 'ADMIN' });
+    assert(devTokenRes.status === 403, `POST /auth/dev-token rejected when disabled: returns 403 (got ${devTokenRes.status})`);
+
+    // Valid admin login for subsequent tests
+    const adminLoginRes = await callRoute('POST', '/auth/login', {
+      username: 'admin',
+      password: 'adminpassword123'
+    });
+    assert(adminLoginRes.status === 200, 'Admin login succeeded');
+    const adminToken = adminLoginRes.data.token;
+
+    // Valid viewer login for subsequent tests
+    const viewerLoginRes = await callRoute('POST', '/auth/login', {
+      username: 'viewer',
+      password: 'viewerpassword123'
+    });
+    assert(viewerLoginRes.status === 200, 'Viewer login succeeded');
+    const viewerToken = viewerLoginRes.data.token;
+
+    // 3. Unauthorized Role Access (403 Forbidden)
+    console.log('\n3. TESTING ROLE-BASED ACCESS CONTROL (403 FORBIDDEN)...');
+    
+    // VIEWER trying to accept pricing suggestion
     const viewerPatchRes = await callRoute('PATCH', `/pricing-suggestions/${testPricing._id}`, { status: 'ACCEPTED' }, viewerToken);
     assert(viewerPatchRes.status === 403, `VIEWER cannot accept pricing suggestion: returns 403 (got ${viewerPatchRes.status})`);
     assert(viewerPatchRes.data.error.includes('not authorized'), 'Error indicates insufficient role permissions');
 
+    // VIEWER trying to accept reorder suggestion
     const viewerReorderRes = await callRoute('PATCH', `/reorder-suggestions/${testReorder._id}`, { status: 'ACCEPTED' }, viewerToken);
     assert(viewerReorderRes.status === 403, `VIEWER cannot accept reorder suggestion: returns 403 (got ${viewerReorderRes.status})`);
 
+    // MERCHANDISER trying to change /config/strategy
     const merchConfigRes = await callRoute('PATCH', '/config/strategy', { strategy: 'ai' }, merchToken);
     assert(merchConfigRes.status === 403, `MERCHANDISER cannot change /config/strategy: returns 403 (got ${merchConfigRes.status})`);
 
+    // VIEWER trying to change /config/strategy
     const viewerConfigRes = await callRoute('PATCH', '/config/strategy', { strategy: 'ai' }, viewerToken);
     assert(viewerConfigRes.status === 403, `VIEWER cannot change /config/strategy: returns 403 (got ${viewerConfigRes.status})`);
 
-    // 3. Authorized Access & Acting User ID Recording
-    console.log('\n3. TESTING AUTHORIZED ACCESS & ACTING USER ID AUDIT TRAIL...');
+    // 4. Authorized Access & Acting User ID Recording
+    console.log('\n4. TESTING AUTHORIZED ACCESS & ACTING USER ID AUDIT TRAIL...');
     
     // ADMIN changes config
     const adminConfigRes = await callRoute('PATCH', '/config/strategy', { strategy: 'rule-based' }, adminToken);
@@ -159,12 +230,12 @@ export async function runAuthAndAuditTests() {
     const merchAcceptPricing = await callRoute('PATCH', `/pricing-suggestions/${testPricing._id}`, { status: 'ACCEPTED' }, merchToken);
     assert(merchAcceptPricing.status === 200, `MERCHANDISER successfully accepts pricing suggestion: 200 OK`);
     assert(merchAcceptPricing.data.status === 'ACCEPTED', 'Status transitioned to ACCEPTED');
-    assert(merchAcceptPricing.data.actedBy === 'usr_merch_42', `Acting user ID recorded on PricingSuggestion: got ${merchAcceptPricing.data.actedBy}`);
+    assert(merchAcceptPricing.data.actedBy === 'usr_merch_01', `Acting user ID recorded on PricingSuggestion: got ${merchAcceptPricing.data.actedBy}`);
 
     // Check product priceHistory recorded acting user ID
     const updatedProduct = await Product.findById(testProduct._id);
     const latestPriceEntry = updatedProduct.priceHistory.slice(-1)[0];
-    assert(latestPriceEntry.changedBy === 'usr_merch_42', `Product priceHistory recorded changedBy: got ${latestPriceEntry.changedBy}`);
+    assert(latestPriceEntry.changedBy === 'usr_merch_01', `Product priceHistory recorded changedBy: got ${latestPriceEntry.changedBy}`);
 
     // ADMIN accepts reorder suggestion
     const adminAcceptReorder = await callRoute('PATCH', `/reorder-suggestions/${testReorder._id}`, { status: 'ACCEPTED' }, adminToken);
@@ -177,8 +248,8 @@ export async function runAuthAndAuditTests() {
     assert(latestSnapshot !== null, 'InventorySnapshot created for REORDER_ACCEPTED');
     assert(latestSnapshot.actedBy === 'usr_admin_01', `InventorySnapshot recorded actedBy = usr_admin_01 (got ${latestSnapshot?.actedBy})`);
 
-    // 4. Append-Only Integrity on InventorySnapshot (Throws on update/delete)
-    console.log('\n4. TESTING APPEND-ONLY GUARDS ON INVENTORYSNAPSHOT...');
+    // 5. Append-Only Integrity on InventorySnapshot (Throws on update/delete)
+    console.log('\n5. TESTING APPEND-ONLY GUARDS ON INVENTORYSNAPSHOT...');
     const testSnapshot = await InventorySnapshot.create({
       productId: testProduct._id,
       stockLevel: 10,
@@ -235,8 +306,8 @@ export async function runAuthAndAuditTests() {
     }
     assert(docSaveErr !== null && docSaveErr.message.includes('append-only'), 'Existing InventorySnapshot doc.save() throws append-only error');
 
-    // 5. Append-Only Integrity on AdvisorLog (Throws on update/delete)
-    console.log('\n5. TESTING APPEND-ONLY GUARDS ON ADVISORLOG...');
+    // 6. Append-Only Integrity on AdvisorLog (Throws on update/delete)
+    console.log('\n6. TESTING APPEND-ONLY GUARDS ON ADVISORLOG...');
     const testLog = await AdvisorLog.create({
       logType: 'AI_CALL',
       productId: testProduct._id,
