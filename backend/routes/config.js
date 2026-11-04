@@ -25,7 +25,14 @@ router.get('/strategy', async (req, res) => {
 // PATCH /config/strategy
 router.patch('/strategy', async (req, res) => {
   try {
-    const { strategy, demandSpikeMultiplier } = req.body;
+    const {
+      strategy,
+      demandSpikeMultiplier,
+      maxSingleChangePercent,
+      maxChangesPer24h,
+      suggestionTtlHours
+    } = req.body;
+
     if (strategy !== undefined && !['rule-based', 'ai'].includes(strategy)) {
       return res.status(400).json({ error: 'Invalid strategy' });
     }
@@ -33,13 +40,34 @@ router.patch('/strategy', async (req, res) => {
       (!Number.isFinite(demandSpikeMultiplier) || demandSpikeMultiplier < 1)) {
       return res.status(400).json({ error: 'demandSpikeMultiplier must be a number of at least 1' });
     }
+    if (maxSingleChangePercent !== undefined &&
+      (!Number.isFinite(maxSingleChangePercent) || maxSingleChangePercent < 1 || maxSingleChangePercent > 100)) {
+      return res.status(400).json({ error: 'maxSingleChangePercent must be between 1 and 100' });
+    }
+    if (maxChangesPer24h !== undefined &&
+      (!Number.isFinite(maxChangesPer24h) || maxChangesPer24h < 1)) {
+      return res.status(400).json({ error: 'maxChangesPer24h must be at least 1' });
+    }
+    if (suggestionTtlHours !== undefined &&
+      (!Number.isFinite(suggestionTtlHours) || suggestionTtlHours < 0.001)) {
+      return res.status(400).json({ error: 'suggestionTtlHours must be a positive number' });
+    }
 
     let config = await Config.findOne();
     if (!config) {
-      config = new Config({ activeStrategy: strategy ?? 'rule-based', demandSpikeMultiplier });
+      config = new Config({
+        activeStrategy: strategy ?? 'rule-based',
+        demandSpikeMultiplier,
+        maxSingleChangePercent,
+        maxChangesPer24h,
+        suggestionTtlHours
+      });
     } else {
       if (strategy !== undefined) config.activeStrategy = strategy;
       if (demandSpikeMultiplier !== undefined) config.demandSpikeMultiplier = demandSpikeMultiplier;
+      if (maxSingleChangePercent !== undefined) config.maxSingleChangePercent = maxSingleChangePercent;
+      if (maxChangesPer24h !== undefined) config.maxChangesPer24h = maxChangesPer24h;
+      if (suggestionTtlHours !== undefined) config.suggestionTtlHours = suggestionTtlHours;
     }
     
     await config.save();

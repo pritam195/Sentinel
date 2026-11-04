@@ -7,10 +7,13 @@ const reorderSuggestionSchema = new mongoose.Schema({
   suggestedLeadTimeDays: { type: Number, required: true, min: 1 },
   confidence: { type: Number, min: 0, max: 1, required: true },
   reasoning: { type: String, required: true },
-  status: { type: String, enum: ['PENDING', 'ACCEPTED', 'REJECTED'], default: 'PENDING' },
+  status: { type: String, enum: ['PENDING', 'ACCEPTED', 'REJECTED', 'STALE', 'EXPIRED'], default: 'PENDING' },
   triggerReason: { type: String, enum: ['INITIAL', 'INVENTORY_LOW', 'DEMAND_SPIKE', 'MANUAL'], required: true },
   isFallback: { type: Boolean, default: false },
-  fallbackReason: { type: String, default: null }
+  fallbackReason: { type: String, default: null },
+  productVersion: { type: Number, default: 0 },
+  productUpdatedAt: { type: Date, required: false },
+  expiresAt: { type: Date, required: true, index: true }
 }, { timestamps: true });
 
 reorderSuggestionSchema.index(

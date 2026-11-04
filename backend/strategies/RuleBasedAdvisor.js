@@ -19,8 +19,36 @@ class RuleBasedAdvisor extends CommerceAdvisor {
       reasoning = 'Demand is significantly higher than category average; raising price by 5%.';
     }
 
+    // Floor clamp: max(cost * (1 + minMargin), 0.5 * current)
+    let floorPrice = product.currentPrice * 0.5;
+    if (product.costPrice != null && product.costPrice > 0) {
+      const minMargin = product.minMarginPercent != null
+        ? (product.minMarginPercent > 1 ? product.minMarginPercent / 100 : product.minMarginPercent)
+        : 0;
+      floorPrice = Math.max(product.costPrice * (1 + minMargin), 0.5 * product.currentPrice);
+    }
+
+    if (recommendedPrice < floorPrice) {
+      recommendedPrice = floorPrice;
+      reasoning += ` [Clamped to margin floor of $${floorPrice.toFixed(2)}]`;
+    }
+
+    // Ceiling clamp: 3x current price
+    const ceilingPrice = product.currentPrice * 3;
+    if (recommendedPrice > ceilingPrice) {
+      recommendedPrice = ceilingPrice;
+    }
+
     // Round to 2 decimals
     recommendedPrice = Math.round(recommendedPrice * 100) / 100;
+
+    if (recommendedPrice > product.currentPrice) {
+      direction = 'INCREASE';
+    } else if (recommendedPrice < product.currentPrice) {
+      direction = 'DECREASE';
+    } else {
+      direction = 'HOLD';
+    }
 
     return {
       recommendedPrice,

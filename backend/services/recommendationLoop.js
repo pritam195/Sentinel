@@ -13,6 +13,27 @@ function isDuplicateKeyError(err) {
   return err && (err.code === 11000 || err.codeName === 'DuplicateKey' || (err.name === 'MongoServerError' && err.code === 11000));
 }
 
+/**
+ * Sweeps and transitions expired PENDING suggestions to EXPIRED
+ */
+export async function expirePendingSuggestions() {
+  const now = new Date();
+  const [pricingExpired, reorderExpired] = await Promise.all([
+    PricingSuggestion.updateMany(
+      { status: 'PENDING', expiresAt: { $lte: now } },
+      { $set: { status: 'EXPIRED' } }
+    ),
+    ReorderSuggestion.updateMany(
+      { status: 'PENDING', expiresAt: { $lte: now } },
+      { $set: { status: 'EXPIRED' } }
+    )
+  ]);
+  return {
+    pricingExpired: pricingExpired.modifiedCount,
+    reorderExpired: reorderExpired.modifiedCount
+  };
+}
+
 export async function processInventoryChange(product) {
   // 1. Calculate category average velocity
   const categoryProducts = await Product.find({ category: product.category });
@@ -26,14 +47,30 @@ export async function processInventoryChange(product) {
     triggers.push('INVENTORY_LOW');
   }
 
-  // Trigger B: Demand Spike (velocity > 3 * category avg)
+  // Trigger B: Demand Spike (velocity > multiplier * category avg)
   const config = await Config.findOne();
   const demandSpikeMultiplier = config?.demandSpikeMultiplier ?? 3;
+  const maxSingleChangePercent = config?.maxSingleChangePercent ?? 20;
+  const maxChangesPer24h = config?.maxChangesPer24h ?? 5;
+  const suggestionTtlHours = config?.suggestionTtlHours ?? 24;
+
   if (product.demandVelocity > 0 && product.demandVelocity > (demandSpikeMultiplier * (categoryAverageVelocity || 1))) {
     triggers.push('DEMAND_SPIKE');
   }
 
   if (triggers.length === 0) return; // Nothing to do
+
+  // Enforce max changes per product per 24h
+  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const changes24h = await PricingSuggestion.countDocuments({
+    productId: product._id,
+    createdAt: { $gte: since24h }
+  });
+
+  if (changes24h >= maxChangesPer24h) {
+    console.log(`[AgentLoop] Max 24h changes limit reached (${changes24h}/${maxChangesPer24h}) for ${product.sku}. Skipping.`);
+    return;
+  }
 
   const strategy = await getActiveStrategy();
   const advisorName = config?.activeStrategy || 'rule-based';
@@ -81,20 +118,43 @@ export async function processInventoryChange(product) {
 
       console.log(`[AgentLoop] Generating suggestions for ${product.sku} due to ${triggerReason}...`);
 
+      const productVersion = product.__v ?? 0;
+      const productUpdatedAt = product.updatedAt || new Date();
+      const expiresAt = new Date(Date.now() + suggestionTtlHours * 60 * 60 * 1000);
+
       if (!existingPricing) {
         const pSuggestion = await strategy.suggestPricing(product, categoryAverageVelocity, triggerReason);
+        
+        // Enforce max single change percent clamp
+        let recommendedPrice = pSuggestion.recommendedPrice;
+        let reasoning = pSuggestion.reasoning;
+        const maxDelta = product.currentPrice * (maxSingleChangePercent / 100);
+        const maxAllowed = Math.round((product.currentPrice + maxDelta) * 100) / 100;
+        const minAllowed = Math.round((product.currentPrice - maxDelta) * 100) / 100;
+
+        if (recommendedPrice > maxAllowed) {
+          recommendedPrice = maxAllowed;
+          reasoning += ` [Clamped to max single change limit of +${maxSingleChangePercent}%]`;
+        } else if (recommendedPrice < minAllowed) {
+          recommendedPrice = minAllowed;
+          reasoning += ` [Clamped to max single change limit of -${maxSingleChangePercent}%]`;
+        }
+
         try {
           await PricingSuggestion.create({
             productId: product._id,
             currentPrice: product.currentPrice,
-            recommendedPrice: pSuggestion.recommendedPrice,
+            recommendedPrice,
             direction: pSuggestion.direction,
             confidence: pSuggestion.confidence,
-            reasoning: pSuggestion.reasoning,
+            reasoning,
             status: 'PENDING',
             triggerReason,
             isFallback: Boolean(pSuggestion.isFallback),
-            fallbackReason: pSuggestion.fallbackReason || null
+            fallbackReason: pSuggestion.fallbackReason || null,
+            productVersion,
+            productUpdatedAt,
+            expiresAt
           });
         } catch (err) {
           if (isDuplicateKeyError(err)) {
@@ -118,7 +178,10 @@ export async function processInventoryChange(product) {
             status: 'PENDING',
             triggerReason,
             isFallback: Boolean(rSuggestion.isFallback),
-            fallbackReason: rSuggestion.fallbackReason || null
+            fallbackReason: rSuggestion.fallbackReason || null,
+            productVersion,
+            productUpdatedAt,
+            expiresAt
           });
         } catch (err) {
           if (isDuplicateKeyError(err)) {

@@ -279,8 +279,16 @@ Demand velocity (orders in 24h): ${product.demandVelocity}; category average: ${
   _validatePricing(value, product) {
     const recommendedPrice = Number(value.recommendedPrice);
     const allowedDirections = ['INCREASE', 'DECREASE', 'HOLD'];
+    let floorPrice = product.currentPrice * 0.5;
+    if (product.costPrice != null && product.costPrice > 0) {
+      const minMargin = product.minMarginPercent != null
+        ? (product.minMarginPercent > 1 ? product.minMarginPercent / 100 : product.minMarginPercent)
+        : 0;
+      floorPrice = Math.max(product.costPrice * (1 + minMargin), 0.5 * product.currentPrice);
+    }
+
     if (!Number.isFinite(recommendedPrice) || recommendedPrice <= 0 ||
-      recommendedPrice < product.currentPrice * 0.5 || recommendedPrice > product.currentPrice * 3 ||
+      recommendedPrice < floorPrice || recommendedPrice > product.currentPrice * 3 ||
       !allowedDirections.includes(value.direction) ||
       !Number.isFinite(Number(value.confidence)) || Number(value.confidence) < 0 || Number(value.confidence) > 1 ||
       typeof value.reasoning !== 'string' || !value.reasoning.trim()) {

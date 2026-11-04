@@ -4,13 +4,14 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node tests/faultInjection.test.js && node tests/concurrency.test.js && node tests/upstreamResilience.test.js",
+    "test": "node tests/faultInjection.test.js && node tests/concurrency.test.js && node tests/upstreamResilience.test.js && node tests/guardrails.test.js",
     "test:fault": "node tests/faultInjection.test.js",
     "test:concurrency": "node tests/concurrency.test.js",
     "test:resilience": "node tests/upstreamResilience.test.js",
+    "test:guardrails": "node tests/guardrails.test.js",
     "test:benchmark": "node tests/benchmark.test.js",
     "test:load": "node tests/loadTest.test.js",
-    "test:all": "node tests/faultInjection.test.js && node tests/concurrency.test.js && node tests/upstreamResilience.test.js && node tests/benchmark.test.js && node tests/loadTest.test.js",
+    "test:all": "node tests/faultInjection.test.js && node tests/concurrency.test.js && node tests/upstreamResilience.test.js && node tests/guardrails.test.js && node tests/benchmark.test.js && node tests/loadTest.test.js",
     "start": "node index.js",
     "dev": "nodemon index.js"
   },

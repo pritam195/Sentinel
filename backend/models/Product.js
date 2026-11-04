@@ -10,6 +10,7 @@ const productSchema = new mongoose.Schema({
   demandVelocity: { type: Number, default: 0, min: 0 },
   status: { type: String, enum: ['ACTIVE', 'PRICE_REVIEW_PENDING', 'OUT_OF_STOCK'], default: 'ACTIVE' },
   costPrice: { type: Number, required: false, min: 0 },
+  minMarginPercent: { type: Number, required: false, min: 0, default: 0 },
   priceHistory: [{ 
     price: Number, 
     date: { type: Date, default: Date.now } 
