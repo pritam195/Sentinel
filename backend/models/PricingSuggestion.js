@@ -11,4 +11,9 @@ const pricingSuggestionSchema = new mongoose.Schema({
   triggerReason: { type: String, enum: ['INITIAL', 'INVENTORY_LOW', 'DEMAND_SPIKE', 'MANUAL'], required: true }
 }, { timestamps: true });
 
+pricingSuggestionSchema.index(
+  { productId: 1, triggerReason: 1 },
+  { unique: true, partialFilterExpression: { status: 'PENDING' } }
+);
+
 export default mongoose.model('PricingSuggestion', pricingSuggestionSchema);
