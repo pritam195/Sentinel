@@ -73,3 +73,4 @@ class NaiveRuleAdvisor extends CommerceAdvisor {
 }
 
 export default NaiveRuleAdvisor;
+

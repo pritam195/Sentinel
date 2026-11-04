@@ -14,12 +14,13 @@ if (process.env.ALLOW_DEV_TOKENS === 'true' && process.env.NODE_ENV !== 'product
   console.warn('\n⚠️  [SECURITY WARNING] ALLOW_DEV_TOKENS=true is active! Dev token endpoint is enabled at /auth/dev-token. DO NOT ENABLE IN PRODUCTION!\n');
 }
 
-import './services/recommendationLoop.js';
+import { runReconciliationSweep, startReconciliationScheduler } from './services/recommendationLoop.js';
 import mongoose from 'mongoose';
 import cors from 'cors';
 import morgan from 'morgan';
 import PricingSuggestion from './models/PricingSuggestion.js';
 import ReorderSuggestion from './models/ReorderSuggestion.js';
+import Config from './models/Config.js';
 import { seedDefaultUsers } from './models/User.js';
 
 import productRoutes from './routes/products.js';
@@ -51,6 +52,16 @@ mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/sentinel')
         ReorderSuggestion.syncIndexes()
       ]);
       await seedDefaultUsers();
+
+      // Run reconciliation sweep at startup
+      console.log('[Startup] Executing initial inventory reconciliation sweep...');
+      const sweepResult = await runReconciliationSweep();
+      console.log(`[Startup] Initial reconciliation sweep complete: ${sweepResult.reconciledCount} product events re-emitted.`);
+
+      // Start periodic reconciliation scheduler
+      const config = await Config.findOne();
+      const intervalMinutes = config?.reconciliationIntervalMinutes ?? parseInt(process.env.RECONCILIATION_INTERVAL_MINUTES || '15', 10);
+      startReconciliationScheduler(intervalMinutes * 60 * 1000);
     } catch (e) {
       console.warn('Startup initialization warning:', e.message);
     }

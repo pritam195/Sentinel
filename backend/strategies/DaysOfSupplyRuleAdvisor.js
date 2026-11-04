@@ -108,3 +108,4 @@ export class DaysOfSupplyRuleAdvisor extends CommerceAdvisor {
 }
 
 export default DaysOfSupplyRuleAdvisor;
+

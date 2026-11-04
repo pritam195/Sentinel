@@ -211,38 +211,41 @@ export async function processInventoryChange(product) {
 
       if (!existingReorder) {
         const rSuggestion = await strategy.suggestReorder(product, triggerReason);
-        const rawQuantity = rSuggestion.rawRecommendedQuantity ?? rSuggestion.rawQuantity ?? rSuggestion.recommendedQuantity;
-        const outcome = rSuggestion.isFallback
-          ? 'FALLBACK'
-          : (rSuggestion.wasClamped ? 'clamped_by_policy' : (rSuggestion.outcome || 'success'));
+        if (rSuggestion && rSuggestion.recommendedQuantity >= 1) {
+          const rawQuantity = rSuggestion.rawRecommendedQuantity ?? rSuggestion.rawQuantity ?? rSuggestion.recommendedQuantity;
+          const outcome = rSuggestion.isFallback
+            ? 'FALLBACK'
+            : (rSuggestion.wasClamped ? 'clamped_by_policy' : (rSuggestion.outcome || 'success'));
 
-        try {
-          await ReorderSuggestion.create({
-            productId: product._id,
-            currentStock: product.stockLevel,
-            stockAtGeneration: product.stockLevel,
-            recommendedQuantity: rSuggestion.recommendedQuantity,
-            rawRecommendedQuantity: rawQuantity,
-            rawQuantity,
-            wasClamped: Boolean(rSuggestion.wasClamped),
-            clampReason: rSuggestion.clampReason || null,
-            outcome,
-            suggestedLeadTimeDays: rSuggestion.suggestedLeadTimeDays ?? 7,
-            confidence: rSuggestion.confidence,
-            reasoning: rSuggestion.reasoning,
-            status: 'PENDING',
-            triggerReason,
-            isFallback: Boolean(rSuggestion.isFallback),
-            fallbackReason: rSuggestion.fallbackReason || null,
-            productVersion,
-            productUpdatedAt,
-            expiresAt
-          });
-        } catch (err) {
-          if (isDuplicateKeyError(err)) {
-            console.log(`[AgentLoop] Reorder suggestion already pending for ${product.sku} (${triggerReason}) (E11000). Skipping.`);
-          } else {
-            throw err;
+          const safeStock = Math.max(0, product.stockLevel || 0);
+          try {
+            await ReorderSuggestion.create({
+              productId: product._id,
+              currentStock: safeStock,
+              stockAtGeneration: safeStock,
+              recommendedQuantity: rSuggestion.recommendedQuantity,
+              rawRecommendedQuantity: rawQuantity,
+              rawQuantity,
+              wasClamped: Boolean(rSuggestion.wasClamped),
+              clampReason: rSuggestion.clampReason || null,
+              outcome,
+              suggestedLeadTimeDays: rSuggestion.suggestedLeadTimeDays ?? 7,
+              confidence: rSuggestion.confidence,
+              reasoning: rSuggestion.reasoning,
+              status: 'PENDING',
+              triggerReason,
+              isFallback: Boolean(rSuggestion.isFallback),
+              fallbackReason: rSuggestion.fallbackReason || null,
+              productVersion,
+              productUpdatedAt,
+              expiresAt
+            });
+          } catch (err) {
+            if (isDuplicateKeyError(err)) {
+              console.log(`[AgentLoop] Reorder suggestion already pending for ${product.sku} (${triggerReason}) (E11000). Skipping.`);
+            } else {
+              throw err;
+            }
           }
         }
       }
@@ -262,3 +265,113 @@ inventoryEvents.on('inventory:changed', async (product) => {
     console.error(`[AgentLoop] Uncaught error in inventory:changed listener for ${product.sku}:`, error);
   }
 });
+
+/**
+ * Wait for all active inFlightLocks to clear
+ */
+export async function waitForInFlightToClear(timeoutMs = 10000) {
+  const start = Date.now();
+  while (inFlightLocks.size > 0 && (Date.now() - start < timeoutMs)) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
+/**
+ * Reconciliation sweep:
+ * Finds products whose trigger conditions hold but have no PENDING suggestion,
+ * and re-emits inventory:changed events for them.
+ * The partial unique index on { productId, triggerReason } with status: 'PENDING'
+ * ensures idempotency across concurrent sweeps and process restarts.
+ */
+export async function runReconciliationSweep(options = {}) {
+  const config = await Config.findOne();
+  const demandSpikeMultiplier = config?.demandSpikeMultiplier ?? 3;
+
+  // 1. Calculate category average velocities
+  const categoryAvgs = await Product.aggregate([
+    { $group: { _id: '$category', avgVelocity: { $avg: '$demandVelocity' } } }
+  ]);
+  const catAvgMap = new Map(categoryAvgs.map(c => [c._id, c.avgVelocity || 0]));
+
+  // 2. Scan all products for trigger conditions
+  const products = await Product.find({});
+  const reemittedProducts = [];
+
+  for (const product of products) {
+    const holds = [];
+    if (product.stockLevel < product.reorderThreshold) {
+      holds.push('INVENTORY_LOW');
+    }
+
+    const catAvg = catAvgMap.get(product.category) || 1;
+    if (product.demandVelocity > 0 && product.demandVelocity > (demandSpikeMultiplier * catAvg)) {
+      holds.push('DEMAND_SPIKE');
+    }
+
+    if (holds.length === 0) continue;
+
+    // Check if any active trigger lacks pending suggestions
+    let needsReconciliation = false;
+    for (const triggerReason of holds) {
+      const pendingPricing = await PricingSuggestion.findOne({ productId: product._id, triggerReason, status: 'PENDING' });
+      if (!pendingPricing) {
+        needsReconciliation = true;
+        break;
+      }
+      if (triggerReason === 'INVENTORY_LOW') {
+        const pendingReorder = await ReorderSuggestion.findOne({ productId: product._id, triggerReason, status: 'PENDING' });
+        if (!pendingReorder) {
+          needsReconciliation = true;
+          break;
+        }
+      }
+    }
+
+    if (needsReconciliation) {
+      console.log(`[Reconciliation] Trigger active without pending suggestion for ${product.sku} (${holds.join(', ')}). Re-emitting event.`);
+      reemittedProducts.push(product);
+      inventoryEvents.emit('inventory:changed', product);
+    }
+  }
+
+  if (options.awaitProcessing) {
+    await waitForInFlightToClear(options.timeoutMs || 10000);
+  }
+
+  return {
+    scannedProducts: products.length,
+    reconciledCount: reemittedProducts.length,
+    reemittedProducts
+  };
+}
+
+let reconciliationTimer = null;
+
+/**
+ * Start periodic reconciliation scheduler
+ */
+export function startReconciliationScheduler(intervalMs = 15 * 60 * 1000) {
+  if (reconciliationTimer) clearInterval(reconciliationTimer);
+  if (intervalMs && intervalMs > 0) {
+    reconciliationTimer = setInterval(async () => {
+      try {
+        await runReconciliationSweep();
+      } catch (err) {
+        console.error('[Reconciliation] Error during scheduled reconciliation sweep:', err);
+      }
+    }, intervalMs);
+    if (reconciliationTimer.unref) {
+      reconciliationTimer.unref();
+    }
+  }
+}
+
+/**
+ * Stop periodic reconciliation scheduler
+ */
+export function stopReconciliationScheduler() {
+  if (reconciliationTimer) {
+    clearInterval(reconciliationTimer);
+    reconciliationTimer = null;
+  }
+}

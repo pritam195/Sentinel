@@ -155,7 +155,11 @@ Latencies measured via high-resolution `performance.now()` across all executed c
 ## 5. Load and Scale Test Results
 
 - **Harness**: `backend/tests/loadTest.test.js`
-- **Catalog Size**: 520 products seeded in 178.7ms
+- **Execution Command**: `npm --prefix backend run test:load`
+- **Execution Mode**: `MOCK` (`BENCHMARK_MODE=mock`)
+- **Model**: `gemini-2.5-flash (mock)`
+- **Git Commit**: `6b5f3fb`
+- **Catalog Size**: 520 products seeded in 213.9ms
   - Electronics: 174
   - Apparel: 173
   - Home: 173
@@ -167,33 +171,40 @@ Latencies measured via high-resolution `performance.now()` across all executed c
 |---|---|
 | Total Products in Catalog | 520 |
 | Total Orders Dispatched | 150 |
-| Triggers Fired (`INVENTORY_LOW`) | 20 |
-| Triggers Fired (`DEMAND_SPIKE`) | 14 |
-| Total Triggers Fired | 34 |
-| Pricing Suggestions Generated | 34 |
-| Reorder Suggestions Generated | 34 |
-| Total Suggestions Generated | 68 |
-| Total Inventory Snapshots Persisted | 250 |
+| Triggers Fired (`INVENTORY_LOW`) | 26 |
+| Triggers Fired (`DEMAND_SPIKE`) | 16 |
+| Total Triggers Fired | 42 |
+| Pricing Suggestions Generated | 24 |
+| Reorder Suggestions Generated | 20 |
+| Total Suggestions Generated | 44 |
+| Total Inventory Snapshots Persisted | 250 (100 benchmark + 150 simulated orders) |
 
-### LLM Call Latency Percentiles & Rate-Limit Handling
+### Upstream Resilience, Circuit Breaker & Fallback Breakdown
 
-Under the burst of 68 concurrent advisor requests, Google Gemini's free-tier rate limit (5 requests per minute) returned HTTP 429 (`RESOURCE_EXHAUSTED`).
+Under the burst of concurrent advisor requests with active upstream resilience controls (concurrency semaphore limit: 2, exponential backoff with jitter: 3 retries, and circuit breaker trip threshold: 3 consecutive failures):
 
-- **Total AI Advisor Calls**: 68
-- **Fallback Triggered**: 68 (100.0%)
-- **Logged Outcome**: `api_error` (HTTP 429)
-- **Suggestions Lost**: 0 (All 68 suggestions were produced via `RuleBasedAdvisor`)
+| Metric | Measured Value | Notes |
+|---|---|---|
+| **Total Advisor Requests** | 44 | 100% of triggered requests handled safely |
+| **Calls that Reached Gemini API** | 24 | Handled under semaphore concurrency limit |
+| **Calls Bypassed by Circuit Breaker** | 20 | Fast-failed instantly via `CIRCUIT_OPEN` fallback |
+| **Total Retry Attempts** | 77 | Exponential backoff retries with full jitter |
+| **Exhausted Retries** | 24 | Failed after max retries; fell back safely to rule engine |
+| **Total Fell Back to Rule Engine** | 44 | 100% fallback retention, 0 dropped events |
+| **Circuit Breaker Final State** | `OPEN` | Automatically tripped to prevent upstream hammering |
+| **Fallback Reason: `RATE_LIMITED`** | 24 | Caught on initial 429 exhaustion before breaker tripped |
+| **Fallback Reason: `CIRCUIT_OPEN`** | 20 | Bypassed Gemini entirely while breaker in `OPEN` state |
 
-Latency percentiles recorded for the rate-limit detection, error classification, and rule fallback cycle:
+### Latency Percentiles (With Circuit Breaker Fast-Fail)
 
-| Percentile | Measured Latency |
-|---|---|
-| Min Latency | 155.57 ms |
-| Median (P50) | 237.45 ms |
-| P90 | 316.48 ms |
-| P95 | 359.77 ms |
-| P99 | 551.06 ms |
-| Max Latency | 551.06 ms |
+| Percentile | Measured Latency | Operational Context |
+|---|---|---|
+| **Min Latency** | **0.06 ms** | Fast-fail bypass when Circuit Breaker is `OPEN` |
+| **Median (P50)** | **5,321.21 ms** | Rate-limit detection and exponential backoff retry cycles |
+| **P90** | **21,947.50 ms** | Multiple backoff intervals before final retry exhaustion |
+| **P95** | **26,761.28 ms** | Worst-case multi-retry cycle |
+| **P99** | **27,208.33 ms** | Maximum backoff boundary |
+| **Max Latency** | **27,208.33 ms** | Maximum measured time before safe rule fallback |
 
 ### Database Write Overhead: `InventorySnapshot` Audit Trail
 
@@ -201,17 +212,157 @@ A controlled benchmark comparing 100 stock update writes with and without immuta
 
 | Operation | Total Time (100 writes) | Mean Latency per Write |
 |---|---|---|
-| Direct Product Updates (Baseline) | 93.90 ms | 0.94 ms / write |
-| Product Update + `InventorySnapshot` Insert | 184.37 ms | 1.84 ms / write |
-| **Incremental Audit Trail Overhead** | **+90.47 ms** | **+0.90 ms / write (+96.3%)** |
+| Direct Product Updates (Baseline) | 104.17 ms | 1.04 ms / write |
+| Product Update + `InventorySnapshot` Insert | 246.70 ms | 2.47 ms / write |
+| **Incremental Audit Trail Overhead** | **+142.53 ms** | **+1.43 ms / write (+136.8%)** |
 
-The absolute latency cost of persisting immutable inventory audit snapshots is 0.90 milliseconds per transaction on local MongoDB.
+The absolute latency cost of persisting an immutable inventory audit snapshot is 1.43 milliseconds per transaction on local MongoDB.
 
 ---
 
-## 6. Summary of Architectural Findings
+## 6. Upstream Resilience & Circuit Breaker Suite
+
+- **Harness**: `backend/tests/upstreamResilience.test.js`
+- **Execution Command**: `npm --prefix backend run test:resilience`
+- **Total Test Cases**: 51
+- **Passed**: 51 (100.0%)
+- **Failed**: 0
+
+### Measured Resilience Mechanisms
+
+| Subsystem Tested | Test Condition | Observed Behavior | Status |
+|---|---|---|---|
+| **Retry-After Parser** | Integer seconds (`"5"`) | Parsed into 5,000ms delay | PASS |
+| **Retry-After Parser** | HTTP-date header (`Sun, 06 Nov 2026 08:49:37 GMT`) | Parsed into future delta milliseconds | PASS |
+| **Retry-After Parser** | Undefined header | Returns `null` (falls back to exponential calculation) | PASS |
+| **Semaphore Limiter** | 5 concurrent requests with limit of 2 | Peak concurrency: exactly 2; remaining 3 queued and executed cleanly | PASS |
+| **Exponential Backoff** | Upstream 429 rate limit | Retried twice with jitter; succeeded on attempt 3 (`callCount = 3`) | PASS |
+| **Circuit Breaker** | Normal operations | Initial state: `CLOSED` | PASS |
+| **Circuit Breaker** | 3 consecutive failures | State transitioned from `CLOSED` $\to$ `OPEN` | PASS |
+| **Circuit Breaker** | Requests while `OPEN` | Call bypassed API; fast-failed with `CIRCUIT_OPEN` in 0.06ms | PASS |
+| **Circuit Breaker** | Cooldown window expiration | State transitioned from `OPEN` $\to$ `HALF_OPEN` | PASS |
+| **Circuit Breaker** | Successful probe call | State transitioned from `HALF_OPEN` $\to$ `CLOSED` | PASS |
+| **AdvisorLog Recording** | All 7 fallback reason enums | Recorded `isFallback: true` and enum in `AdvisorLog` | PASS |
+| **Health API** | `GET /config/advisor-health` | Exposes breaker state, active concurrency, retry stats, and breakdown | PASS |
+
+---
+
+## 7. Guardrail & Staleness Suite
+
+- **Harness**: `backend/tests/guardrails.test.js`
+- **Execution Command**: `npm --prefix backend run test:guardrails`
+- **Total Test Cases**: 36
+- **Passed**: 36 (100.0%)
+- **Failed**: 0
+
+### Measured Guardrail & Concurrency Behaviors
+
+| Guardrail Mechanism | Input Scenario | Enforced Action | HTTP Status | Status |
+|---|---|---|---|---|
+| **Margin Floor Clamp** | Raw AI price $52.00 on $50 cost + 20% min margin ($60 floor) | Clamped to $60.00; `rawPrice = $52.00` preserved; `wasClamped: true` | N/A (Stage 3) | PASS |
+| **Max Single-Change Cap** | Price increase +40% with +15% policy cap | Clamped from $140 to $115; `rawPrice = $140` preserved | N/A (Stage 3) | PASS |
+| **24-Hour Change Quota** | 4th change event for product with quota = 3/24h | Suggestion creation skipped; logged `rejected_by_policy` | N/A (Stage 3) | PASS |
+| **Price Version Staleness** | PATCH `/products/:id/price` mutates price, then accept suggestion | Rejected with `409 Conflict`; suggestion marked `STALE` | `409 Conflict` | PASS |
+| **Stock Change Neutrality** | Normal order purchase occurs, then accept pricing suggestion | Accepted successfully with `200 OK`; `priceVersion` unchanged | `200 OK` | PASS |
+| **Reorder Drift Threshold** | Stock drops $>25\%$ from `stockAtGeneration`, then accept reorder | Rejected with `409 Conflict`; suggestion marked `STALE` | `409 Conflict` | PASS |
+| **Reorder Small Drift** | Stock drops $\le 25\%$ from `stockAtGeneration`, then accept reorder | Accepted successfully with `200 OK` | `200 OK` | PASS |
+| **TTL Expiry Sweeper** | Expired suggestion accepted via PATCH route | Sweeper transitions to `EXPIRED`; PATCH returns `410 Gone` | `410 Gone` | PASS |
+
+---
+
+## 8. Auth & RBAC Security Suite
+
+- **Harness**: `backend/tests/authAndAudit.test.js`
+- **Execution Command**: `npm --prefix backend run test:auth`
+- **Total Test Cases**: 57
+- **Passed**: 57 (100.0%)
+- **Failed**: 0
+
+### Security & Access Control Verification
+
+| Test Category | Target Endpoint | Action / Payload | Expected Response | Observed Response | Status |
+|---|---|---|---|---|---|
+| **Unauthenticated** | `PATCH /pricing-suggestions/:id` | No `Authorization` header | `401 Unauthorized` | `401 Unauthorized` | PASS |
+| **Token Expiry** | `PATCH /pricing-suggestions/:id` | Token with `exp: past` | `401 Unauthorized` | `401 Unauthorized` | PASS |
+| **Token Tampering** | `PATCH /pricing-suggestions/:id` | Modified signature / payload | `401 Unauthorized` | `401 Unauthorized` | PASS |
+| **Server-Side Role Lookup** | `POST /auth/login` | Valid merchandiser credentials | `200 OK` + signed JWT | `200 OK`, role: `MERCHANDISER` | PASS |
+| **Privilege Escalation** | `POST /auth/login` | Body: `{ role: "ADMIN" }` | Escaped body ignored; server role kept | Role remains `MERCHANDISER` | PASS |
+| **Dev Token Guard** | `POST /auth/dev-token` | `ALLOW_DEV_TOKENS=false` | `403 Forbidden` | `403 Forbidden` | PASS |
+| **RBAC: Viewer Write** | `PATCH /pricing-suggestions/:id` | `role: VIEWER` accepting suggestion | `403 Forbidden` | `403 Forbidden` | PASS |
+| **RBAC: Viewer Reorder** | `PATCH /reorder-suggestions/:id` | `role: VIEWER` accepting reorder | `403 Forbidden` | `403 Forbidden` | PASS |
+| **RBAC: Merchandiser Strategy** | `POST /config/strategy` | `role: MERCHANDISER` changing config | `403 Forbidden` | `403 Forbidden` | PASS |
+| **RBAC: Admin Strategy** | `POST /config/strategy` | `role: ADMIN` changing config | `200 OK` | `200 OK` | PASS |
+| **Audit Attribution** | `PATCH /pricing-suggestions/:id` | Merchandiser accepts pricing | `actedBy: "usr_merch_01"` recorded | Recorded on doc & priceHistory | PASS |
+| **Audit Attribution** | `PATCH /reorder-suggestions/:id` | Admin accepts reorder | `actedBy: "usr_admin_01"` recorded | Recorded on doc & Snapshot | PASS |
+
+---
+
+## 9. Append-Only Audit Integrity Suite
+
+Both `InventorySnapshot` and `AdvisorLog` collections are strictly append-only. All modification and deletion mutations across Mongoose query and document middleware are intercepted and rejected at the application layer:
+
+| Target Mongoose Operation | `InventorySnapshot` Enforcement | `AdvisorLog` Enforcement | Result |
+|---|---|---|---|
+| `updateOne()` | Throws `Error: Append-only collection` | Throws `Error: Append-only collection` | PASS |
+| `updateMany()` | Throws `Error: Append-only collection` | Throws `Error: Append-only collection` | PASS |
+| `deleteOne()` | Throws `Error: Append-only collection` | Throws `Error: Append-only collection` | PASS |
+| `deleteMany()` | Throws `Error: Append-only collection` | Throws `Error: Append-only collection` | PASS |
+| `findOneAndUpdate()` | Throws `Error: Append-only collection` | Throws `Error: Append-only collection` | PASS |
+| `replaceOne()` | Throws `Error: Append-only collection` | Throws `Error: Append-only collection` | PASS |
+| `findOneAndReplace()` | Throws `Error: Append-only collection` | Throws `Error: Append-only collection` | PASS |
+| `findOneAndDelete()` | Throws `Error: Append-only collection` | Throws `Error: Append-only collection` | PASS |
+| `bulkWrite([{ updateOne }])` | Throws `Error: Append-only collection` | Throws `Error: Append-only collection` | PASS |
+| `bulkWrite([{ deleteOne }])` | Throws `Error: Append-only collection` | Throws `Error: Append-only collection` | PASS |
+| `doc.save()` (on existing doc) | Throws `Error: Append-only collection` | Throws `Error: Append-only collection` | PASS |
+| `bulkWrite([{ insertOne }])` | Allowed (append operation) | Allowed (append operation) | PASS |
+| `insertMany()` | Allowed (batch append) | Allowed (batch append) | PASS |
+
+> [!NOTE]
+> **Known Limitation: Driver Bypass**: The append-only guard is enforced via Mongoose schema query, document, and model middleware. Direct low-level MongoDB driver calls (`Model.collection.updateOne()`, raw mongo shell commands, or unauthenticated database administrative connections) bypass application middleware.
+
+---
+
+## 10. Event-Loss Recovery & Reconciliation Suite
+
+- **Harness**: `backend/tests/eventLossRecovery.test.js`
+- **Execution Command**: `npm --prefix backend run test:recovery`
+- **Total Test Cases**: 12
+- **Passed**: 12 (100.0%)
+- **Failed**: 0
+
+### Measured Recovery Behavior
+
+```
+1. TESTING STOCK MUTATION WITH MID-FLIGHT PROCESS KILL & STARTUP RECOVERY...
+  Target Product: RECOVER-LOW-1793805320270
+  Spawning worker to mutate stock to 4 (< threshold 20) and crash abruptly...
+  [PASS] Worker successfully mutated stock level in MongoDB
+  [PASS] Worker crashed mid-flight with non-zero exit code (got 137)
+  [PASS] Stock level is mutated to 4 in database (observed: 4)
+  [PASS] Zero pricing suggestions exist after crash (observed: 0)
+  [PASS] Zero reorder suggestions exist after crash (observed: 0)
+
+2. EXECUTING STARTUP RECONCILIATION SWEEP (RE-EMITTING EVENT)...
+  [PASS] Reconciliation sweep identified trigger and re-emitted event
+  [PASS] Exactly one PENDING pricing suggestion created after restart sweep (got: 1)
+  [PASS] Exactly one PENDING reorder suggestion created after restart sweep (got: 1)
+  [PASS] Pricing suggestion triggerReason is INVENTORY_LOW (got: INVENTORY_LOW)
+  [PASS] Reorder suggestion triggerReason is INVENTORY_LOW (got: INVENTORY_LOW)
+
+3. TESTING IDEMPOTENCY OF RECONCILIATION SWEEP (SECOND PASS / NO DUPLICATES)...
+  [PASS] Idempotency verified: exactly 1 pricing suggestion remains (observed: 1)
+  [PASS] Idempotency verified: exactly 1 reorder suggestion remains (observed: 1)
+```
+
+The reconciliation sweep runs automatically at startup and on a configurable interval (default: 15 minutes, configurable via `reconciliationIntervalMinutes` in `Config` or `RECONCILIATION_INTERVAL_MINUTES` env). It detects active trigger conditions (`stockLevel < reorderThreshold` or demand surges) where no `PENDING` suggestion currently exists and safely re-emits `inventory:changed` events. The partial unique index on `{ productId: 1, triggerReason: 1 }` guarantees that concurrent or repeated sweeps cannot produce duplicate pending suggestions.
+
+---
+
+## 11. Summary of Architectural Findings
 
 1. **Safety Boundary Enforcement**: Across 18 fault conditions, `AIAdvisor` rejected all invalid outputs (malformed JSON, out-of-bounds prices $<0.5\times$ or $>3.0\times$, timeouts, and upstream errors) and retained 100% of recommendations through deterministic fallback.
-2. **Event Loop Deduplication**: Under 100 concurrent inventory events fired in rapid succession, the deduplication locks prevented duplicate `PENDING` suggestions, resulting in exactly 0 duplicate suggestions.
-3. **Decision Quality Alignment**: Against 105 rubric-grounded scenarios across 5 commercial categories, `RuleBasedAdvisor` and `AIAdvisor` achieved statistically indistinguishable directional and pricing window agreement ($p = 0.4795 \ge 0.05$). On inventory replenishment, `AIAdvisor` statistically outperformed static rules (83.8% vs 36.2%, $p < 0.0001$) by dynamically sizing orders to sales velocity rather than fixed threshold multiples.
-4. **Audit Trail Cost**: Maintaining an immutable `InventorySnapshot` history incurs an additional 0.90ms write latency per transaction.
+2. **Event Loop Deduplication**: Under 100 concurrent inventory events fired in rapid succession, the deduplication locks and partial unique MongoDB index prevented duplicate `PENDING` suggestions, resulting in exactly 0 duplicate suggestions.
+3. **Decision Quality Alignment**: Against 105 rubric-grounded scenarios across 5 commercial categories, `DaysOfSupplyRuleAdvisor` and `AIAdvisor` achieved statistically indistinguishable replenishment accuracy on the held-out split (82.2% vs 85.7%, $p = 1.0000 \ge 0.05$). AI does **NOT** outperform textbook inventory theory. Static heuristics (`threshold * 2`) fail (21.9% accuracy) because they ignore velocity.
+4. **Upstream Resilience Under Load**: Under a burst of 150 simulated orders across 520 products, the circuit breaker tripped cleanly to `OPEN` after repeated 429 exhaustion, fast-failing subsequent calls in 0.06ms and preventing cascade failure, while 100% of recommendations were fulfilled via the deterministic fallback engine.
+5. **Event-Loss Recovery**: Sudden process crashes mid-flight no longer cause permanent event loss. The startup reconciliation sweep scans active product triggers lacking pending recommendations and restores suggestions idempotently.
+6. **Audit Trail Cost**: Persisting immutable `InventorySnapshot` history incurs an incremental write latency of 1.43ms per transaction on local MongoDB.

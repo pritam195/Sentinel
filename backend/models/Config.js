@@ -6,7 +6,8 @@ const configSchema = new mongoose.Schema({
   maxSingleChangePercent: { type: Number, min: 1, max: 100, default: 20 },
   maxChangesPer24h: { type: Number, min: 1, default: 5 },
   suggestionTtlHours: { type: Number, min: 1, default: 24 },
-  reorderStalenessThresholdPercent: { type: Number, min: 1, max: 100, default: 25 }
+  reorderStalenessThresholdPercent: { type: Number, min: 1, max: 100, default: 25 },
+  reconciliationIntervalMinutes: { type: Number, min: 1, default: 15 }
 });
 
 export default mongoose.model('Config', configSchema);
