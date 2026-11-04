@@ -1,0 +1,33 @@
+{
+  "name": "sentinel",
+  "version": "1.0.0",
+  "description": "Event-driven inventory and dynamic pricing engine with advisory AI & HITL approval queue",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "demo": "npm --prefix backend run demo",
+    "test": "npm --prefix backend test",
+    "test:fault": "npm --prefix backend run test:fault",
+    "test:concurrency": "npm --prefix backend run test:concurrency",
+    "test:resilience": "npm --prefix backend run test:resilience",
+    "test:guardrails": "npm --prefix backend run test:guardrails",
+    "test:auth": "npm --prefix backend run test:auth",
+    "test:recovery": "npm --prefix backend run test:recovery",
+    "test:benchmark": "npm --prefix backend run test:benchmark",
+    "test:load": "npm --prefix backend run test:load",
+    "test:all": "npm --prefix backend run test:all",
+    "seed": "node backend/seed.js",
+    "build": "npm --prefix frontend run build",
+    "start": "npm --prefix backend start"
+  },
+  "keywords": [
+    "inventory",
+    "pricing",
+    "hitl",
+    "ecommerce",
+    "guardrails",
+    "llm-advisor"
+  ],
+  "author": "Sentinel Contributors",
+  "license": "MIT"
+}

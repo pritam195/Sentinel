@@ -1,0 +1,43 @@
+services:
+  mongo:
+    image: mongo:7.0
+    container_name: sentinel-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sentinel-backend
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+      - MONGO_URI=mongodb://mongo:27017/sentinel
+      - NODE_ENV=production
+      - JWT_SECRET=sentinel_jwt_secret_docker_compose_key_32_chars
+      - ALLOW_DEV_TOKENS=false
+      - BENCHMARK_MODE=mock
+      - LLM_MAX_CONCURRENCY=5
+      - RECONCILIATION_INTERVAL_MINUTES=15
+    depends_on:
+      - mongo
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: sentinel-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  mongo_data:

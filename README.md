@@ -1,5 +1,7 @@
 # Sentinel
 
+[![CI](https://github.com/pritam195/Sentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/pritam195/Sentinel/actions/workflows/ci.yml)
+
 **An event-driven inventory and dynamic pricing engine that treats AI as advisory, not authoritative.**
 
 Sentinel is a full-stack commerce decision system that autonomously detects inventory and demand signals, generates pricing and replenishment recommendations using either deterministic rules or a Google Gemini 2.5 Flash LLM advisor, and routes every suggestion through an authenticated human-in-the-loop (HITL) approval queue before it can affect live pricing or stock.
@@ -194,11 +196,51 @@ All write endpoints require a valid JWT bearer token (`Authorization: Bearer <to
 
 ---
 
+## Screenshots & Visual Interface
+
+Visual inspection assets and captures of the Sentinel interface are documented in [`docs/screenshots/`](./docs/screenshots/):
+
+| View | Asset Reference | Key Behaviors Displayed |
+|---|---|---|
+| **Merchandiser Dashboard** | [`dashboard.png`](./docs/screenshots/dashboard.png) | Active catalog telemetry strip, inventory levels, category velocities, and strategy badge |
+| **HITL Approval Queue** | [`approval-queue.png`](./docs/screenshots/approval-queue.png) | Pending pricing and reorder suggestions, confidence meters, economic rationale, and Accept/Reject buttons |
+| **Fallback Detection Badge** | [`fallback-badge.png`](./docs/screenshots/fallback-badge.png) | Real-time warning pill indicating upstream LLM throttling / circuit breaker skip and safe rule fallback |
+
+> See [`docs/screenshots/CHECKLIST.md`](./docs/screenshots/CHECKLIST.md) for capture instructions, UI component descriptions, and local verification steps.
+
+---
+
+## Run It in 30 Seconds
+
+### Option 1: Docker Compose (All Services Containerized)
+
+Clone the repository and launch MongoDB, backend API, and Vite frontend in one command:
+
+```bash
+docker compose up -d
+npm run demo
+```
+
+The demo script immediately connects, seeds catalog data, logs in a demo merchandiser, and dispatches a scripted low-stock event generating pending suggestions in the HITL queue. Open `http://localhost:5173` to view the dashboard.
+
+### Option 2: Local Node.js Execution
+
+```bash
+# 1. Install & Seed
+npm install
+npm run seed
+
+# 2. Run Instant Scripted Demo
+npm run demo
+```
+
+---
+
 ## Getting Started
 
 ### Prerequisites
 - Node.js 20+
-- MongoDB running locally (`mongodb://localhost:27017`)
+- MongoDB running locally (`mongodb://localhost:27017`) or Docker
 - Gemini API key (optional — system operates via deterministic rule-based advisor if absent)
 
 ### Backend Setup
@@ -206,7 +248,6 @@ All write endpoints require a valid JWT bearer token (`Authorization: Bearer <to
 cd backend
 cp .env.example .env      # Add MONGO_URI and optional LLM_API_KEY
 npm install
-node seed.js               # Seed catalog and initial snapshots
 npm run dev                # Starts API server on http://localhost:5000
 ```
 
@@ -219,8 +260,10 @@ npm run dev                # Starts Vite dev server on http://localhost:5173
 
 ### Running Test Suites
 ```bash
-cd backend
-npm test                   # Run core test suites (fault, concurrency, resilience, guardrails, auth, recovery)
+# Run core test suites (fault, concurrency, resilience, guardrails, auth, recovery)
+npm test
+
+# Run individual test suites
 npm run test:fault         # 18-case fault-injection battery
 npm run test:concurrency   # In-process, multi-process (2x100), and mid-flight restart tests
 npm run test:resilience    # Upstream semaphore, backoff, and circuit breaker tests

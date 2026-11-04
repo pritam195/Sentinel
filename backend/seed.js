@@ -27,7 +27,7 @@ async function seed() {
     await Product.deleteMany({});
     await PricingSuggestion.deleteMany({});
     await ReorderSuggestion.deleteMany({});
-    await InventorySnapshot.deleteMany({});
+    await InventorySnapshot.collection.deleteMany({});
     console.log('Cleared existing data.');
 
     const products = await Product.insertMany(seedProducts);
