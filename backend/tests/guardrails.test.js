@@ -87,15 +87,19 @@ export async function runGuardrailsTests() {
   assert(clampedResult.recommendedPrice >= 60.00, `Price clamped to margin floor: got $${clampedResult.recommendedPrice} >= $60.00`);
   assert(clampedResult.reasoning.includes('margin floor'), 'Reasoning notes clamping to margin floor');
 
-  // Case B: AI Advisor validates against floor
+  // Case B: AI Advisor applies Stage 3 margin floor policy clamp (suggestion is used, raw value preserved)
   const aiAdvisor = new AIAdvisor({
-    callLLM: () => Promise.resolve('{"recommendedPrice": 52.00, "direction": "DECREASE", "confidence": 0.8, "reasoning": "Discount"}')
+    callLLM: () => Promise.resolve('{"recommendedPrice": 52.00, "direction": "DECREASE", "confidence": 0.8, "reasoning": "Discount"}'),
+    maxSingleChangePercent: 50
   });
 
-  const aiClampedRes = await aiAdvisor.suggestPricing(productWithMargin, 5, 'MANUAL');
-  assert(aiClampedRes.isFallback === true, 'AI price below margin floor rejected by safety validation');
-  assert(aiClampedRes.fallbackReason === 'OUT_OF_BOUNDS', 'Fallback reason recorded as OUT_OF_BOUNDS');
-  assert(aiClampedRes.recommendedPrice >= 60.00, `Fallback price respects floor: $${aiClampedRes.recommendedPrice}`);
+  const aiClampedRes = await aiAdvisor.suggestPricing(productWithMargin, 5, 'MANUAL', { maxSingleChangePercent: 50 });
+  assert(aiClampedRes.isFallback === false, 'AI price below margin floor is clamped by policy (isFallback is false)');
+  assert(aiClampedRes.outcome === 'clamped_by_policy', 'Outcome is clamped_by_policy');
+  assert(aiClampedRes.wasClamped === true, 'wasClamped is true');
+  assert(aiClampedRes.recommendedPrice === 60.00, `Clamped price respects margin floor: $${aiClampedRes.recommendedPrice}`);
+  assert(aiClampedRes.rawPrice === 52.00, `Raw price preserved: $${aiClampedRes.rawPrice}`);
+  assert(aiClampedRes.reasoning.includes('margin floor'), 'Reasoning notes clamping to margin floor');
 
   // Case C: Without costPrice, floor is 0.5 * current
   const productNoCost = {
@@ -110,9 +114,10 @@ export async function runGuardrailsTests() {
   };
 
   const aiNoCost = new AIAdvisor({
-    callLLM: () => Promise.resolve('{"recommendedPrice": 60.00, "direction": "DECREASE", "confidence": 0.8, "reasoning": "Valid 40% discount"}')
+    callLLM: () => Promise.resolve('{"recommendedPrice": 60.00, "direction": "DECREASE", "confidence": 0.8, "reasoning": "Valid 40% discount"}'),
+    maxSingleChangePercent: 50
   });
-  const aiNoCostRes = await aiNoCost.suggestPricing(productNoCost, 5, 'MANUAL');
+  const aiNoCostRes = await aiNoCost.suggestPricing(productNoCost, 5, 'MANUAL', { maxSingleChangePercent: 50 });
   assert(aiNoCostRes.isFallback === false, 'AI price above 0.5x current passes validation when no costPrice set');
   assert(aiNoCostRes.recommendedPrice === 60.00, 'Price kept at $60.00');
 

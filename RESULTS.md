@@ -11,41 +11,54 @@ All figures below reflect actual runs executed on local MongoDB and Node.js with
 The engine logs all system events to a queryable MongoDB collection (`AdvisorLog`) and a streaming file (`backend/logs/metrics.jsonl`). Two event classifications are tracked:
 
 1. **`TRIGGER_FIRED`**: Records timestamp, `productId`, SKU, category, trigger type (`INVENTORY_LOW`, `DEMAND_SPIKE`, `MANUAL`), and active advisor (`rule-based` or `ai`).
-2. **`AI_CALL`**: Records timestamp, SKU, call type (`pricing` or `reorder`), latency in milliseconds via `performance.now()`, outcome classification (`success`, `timeout`, `malformed_json`, `out_of_bounds_clamped`, `api_error`), fallback flag (`fellBack: boolean`), fallback reason enum (`TIMEOUT`, `MALFORMED_JSON`, `OUT_OF_BOUNDS`, `RATE_LIMITED`, `CIRCUIT_OPEN`, `UPSTREAM_ERROR`), and fallback rationale.
+2. **`AI_CALL`**: Records timestamp, SKU, call type (`pricing` or `reorder`), latency in milliseconds via `performance.now()`, outcome classification (`success`, `clamped_by_policy`, `schema_invalid`, `implausible_output`, `malformed_json`, `timeout`, `rate_limited`, `circuit_open`, `api_error`, `rejected_by_policy`), fallback flag (`fellBack: boolean`), fallback reason enum (`SCHEMA_INVALID`, `IMPLAUSIBLE_OUTPUT`, `MALFORMED_JSON`, `TIMEOUT`, `RATE_LIMITED`, `CIRCUIT_OPEN`, `UPSTREAM_ERROR`), and fallback rationale.
 
 ---
 
-## 2. Fault-Injection Test Suite Results
+## 2. Guardrail Pipeline & Fault-Injection Results
+
+The Sentinel guardrail pipeline evaluates every AI suggestion through three ordered, unambiguous stages:
+1. **Stage 1 (Schema Validation)**: Validates JSON structure, required fields, data types, enum values, finite numbers, confidence in $[0, 1]$, and integer quantities. Failure triggers safe rule engine fallback with `fallbackReason: SCHEMA_INVALID` and logged outcome `schema_invalid`.
+2. **Stage 2 (Plausibility Check)**: Validates retail economic plausibility (rejects pricing outside $[0.5\times, 3.0\times]$ of current price, non-positive values, or absurd replenishment quantities). Failure triggers safe rule engine fallback with `fallbackReason: IMPLAUSIBLE_OUTPUT` and logged outcome `implausible_output`.
+3. **Stage 3 (Policy Clamping Layer)**: Enforces business constraints (`maxSingleChangePercent`, margin floor from unit `costPrice`, and `maxChangesPer24h`). Bounded values are clamped rather than discarded; the clamped recommendation is preserved and used (`isFallback: false`, `fellBack: false`, `wasClamped: true`), while the original raw recommendation is persisted for full merchandiser transparency.
 
 - **Harness**: `backend/tests/faultInjection.test.js`
-- **Total Test Cases**: 18
+- **Total Fault-Injection Scenarios**: 18
 - **Passed**: 18
 - **Failed**: 0
 - **Catch & Fallback Success Rate**: 100.0%
 - **Dropped / Lost Suggestions**: 0 (100% of calls returned valid, bounded recommendations)
 
-### Scenario Breakdown & Classification
+### Scenario Breakdown & Stage Mapping
 
-| # | Fault Class Injected | Input Payload Characteristics | Logged Outcome | Safe Rule Fallback | Status |
+| # | Stage That Caught It | Fault Class Injected | Input Payload Characteristics | Logged Outcome | Fallback Reason | Safe Rule Fallback | Status |
+|---|---|---|---|---|---|---|---|
+| 1 | JSON Parsing | Malformed JSON | Raw plain-text string: `"I think you should increase..."` | `malformed_json` | `MALFORMED_JSON` | Yes | PASS |
+| 2 | JSON Parsing | Malformed JSON | Truncated syntax: `{"recommendedPrice": 110.0, "direction": "INC` | `malformed_json` | `MALFORMED_JSON` | Yes | PASS |
+| 3 | JSON Parsing | Malformed JSON | Markdown codeblock without JSON: ```` ```python\nprint(...)``` ```` | `malformed_json` | `MALFORMED_JSON` | Yes | PASS |
+| 4 | Stage 1: Schema Validation | Missing Required Fields | Missing `recommendedPrice` from JSON | `schema_invalid` | `SCHEMA_INVALID` | Yes | PASS |
+| 5 | Stage 1: Schema Validation | Missing Required Fields | Missing `direction` from JSON | `schema_invalid` | `SCHEMA_INVALID` | Yes | PASS |
+| 6 | Stage 1: Schema Validation | Missing Required Fields | Missing `confidence` from JSON | `schema_invalid` | `SCHEMA_INVALID` | Yes | PASS |
+| 7 | Stage 1: Schema Validation | Missing Required Fields | Missing `reasoning` from JSON | `schema_invalid` | `SCHEMA_INVALID` | Yes | PASS |
+| 8 | Stage 1: Schema Validation | Type Violation | String for price (`"expensive"`) & non-enum direction (`"SKYROCKET"`) | `schema_invalid` | `SCHEMA_INVALID` | Yes | PASS |
+| 9 | Stage 2: Plausibility Check | Extreme Out-of-Bounds | Severe underpricing: $10.00 on $100.00 base (0.1x, below 0.5x minimum) | `implausible_output` | `IMPLAUSIBLE_OUTPUT` | Yes | PASS |
+| 10 | Stage 2: Plausibility Check | Extreme Out-of-Bounds | Severe overpricing: $500.00 on $100.00 base (5.0x, above 3.0x maximum) | `implausible_output` | `IMPLAUSIBLE_OUTPUT` | Yes | PASS |
+| 11 | Stage 2: Plausibility Check | Extreme Out-of-Bounds | Negative price: -$50.00 | `implausible_output` | `IMPLAUSIBLE_OUTPUT` | Yes | PASS |
+| 12 | Stage 1: Schema Validation | Out of Bounds Score | Confidence score out of range: 2.5 (limit: 0.0 to 1.0) | `schema_invalid` | `SCHEMA_INVALID` | Yes | PASS |
+| 13 | Stage 1: Schema Validation | Reorder Fault | Missing `recommendedQuantity` from JSON | `schema_invalid` | `SCHEMA_INVALID` | Yes | PASS |
+| 14 | Stage 2: Plausibility Check | Reorder Fault | Quantity out of bounds: 500,000 units on threshold of 20 | `implausible_output` | `IMPLAUSIBLE_OUTPUT` | Yes | PASS |
+| 15 | Stage 1: Schema Validation | Reorder Fault | Fractional quantity: 45.75 units (requires integer) | `schema_invalid` | `SCHEMA_INVALID` | Yes | PASS |
+| 16 | Upstream Network | API Error | Upstream HTTP 503 Service Unavailable | `api_error` | `UPSTREAM_ERROR` | Yes | PASS |
+| 17 | Upstream Network | Network Error | Socket connection refused (`ECONNREFUSED`) | `api_error` | `UPSTREAM_ERROR` | Yes | PASS |
+| 18 | Upstream Timeout | Timeout | 10,000ms AbortController timeout (`AbortError`) | `timeout` | `TIMEOUT` | Yes | PASS |
+
+### Stage 3 Policy Layer Verification (Measured Runs)
+
+| Policy Guardrail Tested | Raw Input | Policy Constraint | Outcome / Clamped Value | Raw Value Preserved | Fell Back? |
 |---|---|---|---|---|---|
-| 1 | Malformed JSON | Raw plain-text string: `"I think you should increase..."` | `malformed_json` | Yes | PASS |
-| 2 | Malformed JSON | Truncated syntax: `{"recommendedPrice": 110.0, "direction": "INC` | `malformed_json` | Yes | PASS |
-| 3 | Malformed JSON | Markdown codeblock without JSON: ```` ```python\nprint(...)``` ```` | `malformed_json` | Yes | PASS |
-| 4 | Missing Fields | Missing `recommendedPrice` from JSON | `out_of_bounds_clamped` | Yes | PASS |
-| 5 | Missing Fields | Missing `direction` from JSON | `out_of_bounds_clamped` | Yes | PASS |
-| 6 | Missing Fields | Missing `confidence` from JSON | `out_of_bounds_clamped` | Yes | PASS |
-| 7 | Missing Fields | Missing `reasoning` from JSON | `out_of_bounds_clamped` | Yes | PASS |
-| 8 | Type Violation | String for price (`"expensive"`) & non-enum direction (`"SKYROCKET"`) | `out_of_bounds_clamped` | Yes | PASS |
-| 9 | Out of Bounds | Severe underpricing: $10.00 on $100.00 base (0.1x, below 0.5x clamp) | `out_of_bounds_clamped` | Yes | PASS |
-| 10 | Out of Bounds | Severe overpricing: $500.00 on $100.00 base (5.0x, above 3.0x clamp) | `out_of_bounds_clamped` | Yes | PASS |
-| 11 | Out of Bounds | Negative price: -$50.00 | `out_of_bounds_clamped` | Yes | PASS |
-| 12 | Out of Bounds | Confidence score out of range: 2.5 (limit: 0.0 to 1.0) | `out_of_bounds_clamped` | Yes | PASS |
-| 13 | Reorder Fault | Missing `recommendedQuantity` from JSON | `out_of_bounds_clamped` | Yes | PASS |
-| 14 | Reorder Fault | Quantity out of bounds: 500,000 units on threshold of 20 | `out_of_bounds_clamped` | Yes | PASS |
-| 15 | Reorder Fault | Fractional quantity: 45.75 units (requires integer) | `out_of_bounds_clamped` | Yes | PASS |
-| 16 | API Error | Upstream HTTP 503 Service Unavailable | `api_error` | Yes | PASS |
-| 17 | Network Error | Socket connection refused (`ECONNREFUSED`) | `api_error` | Yes | PASS |
-| 18 | Timeout | 10,000ms AbortController timeout (`AbortError`) | `timeout` | Yes | PASS |
+| **Max Single-Change Percent** | $140.00 (+40%) | Cap at +15% ($115.00) | `clamped_by_policy` $\to$ **$115.00** | Yes (`rawPrice = $140.00`) | No (`fellBack: false`) |
+| **Cost & Min Margin Floor** | $52.00 (below cost+margin) | Floor at $60.00 ($50 cost $\times$ 1.20) | `clamped_by_policy` $\to$ **$60.00** | Yes (`rawPrice = $52.00`) | No (`fellBack: false`) |
+| **Max Changes per 24h Quota** | 4th change event | Limit: 3 changes per 24h | `rejected_by_policy` $\to$ **0 created** | N/A | Skipped by policy |
 
 ---
 

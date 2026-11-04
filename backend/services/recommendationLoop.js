@@ -4,7 +4,7 @@ import PricingSuggestion from '../models/PricingSuggestion.js';
 import ReorderSuggestion from '../models/ReorderSuggestion.js';
 import { getActiveStrategy } from '../strategies/registry.js';
 import Config from '../models/Config.js';
-import { recordTrigger } from './metrics.js';
+import { recordTrigger, recordAICall } from './metrics.js';
 
 // In-flight mutex set: purely an in-process optimization to reduce duplicate work
 export const inFlightLocks = new Set();
@@ -69,6 +69,30 @@ export async function processInventoryChange(product) {
 
   if (changes24h >= maxChangesPer24h) {
     console.log(`[AgentLoop] Max 24h changes limit reached (${changes24h}/${maxChangesPer24h}) for ${product.sku}. Skipping.`);
+    try {
+      await recordAICall({
+        productId: product._id,
+        sku: product.sku,
+        category: product.category,
+        triggerType: triggers[0],
+        callType: 'pricing',
+        outcome: 'rejected_by_policy',
+        latencyMs: 0,
+        fellBack: false,
+        fallbackReason: null,
+        inputDetails: {
+          currentPrice: product.currentPrice,
+          changes24h,
+          maxChangesPer24h
+        },
+        outputDetails: {
+          rejected: true,
+          reason: `Max 24h change quota of ${maxChangesPer24h} reached (${changes24h} changes in last 24h)`
+        }
+      });
+    } catch (e) {
+      console.error('[AgentLoop] Quota rejection log error:', e.message);
+    }
     return;
   }
 
@@ -123,28 +147,47 @@ export async function processInventoryChange(product) {
       const expiresAt = new Date(Date.now() + suggestionTtlHours * 60 * 60 * 1000);
 
       if (!existingPricing) {
-        const pSuggestion = await strategy.suggestPricing(product, categoryAverageVelocity, triggerReason);
+        const pSuggestion = await strategy.suggestPricing(product, categoryAverageVelocity, triggerReason, { maxSingleChangePercent });
         
-        // Enforce max single change percent clamp
         let recommendedPrice = pSuggestion.recommendedPrice;
         let reasoning = pSuggestion.reasoning;
-        const maxDelta = product.currentPrice * (maxSingleChangePercent / 100);
-        const maxAllowed = Math.round((product.currentPrice + maxDelta) * 100) / 100;
-        const minAllowed = Math.round((product.currentPrice - maxDelta) * 100) / 100;
+        const rawRecommendedPrice = pSuggestion.rawRecommendedPrice ?? pSuggestion.rawPrice ?? recommendedPrice;
+        let wasClamped = Boolean(pSuggestion.wasClamped);
+        let clampReason = pSuggestion.clampReasons ? pSuggestion.clampReasons.join('; ') : (pSuggestion.clampReason || null);
 
-        if (recommendedPrice > maxAllowed) {
-          recommendedPrice = maxAllowed;
-          reasoning += ` [Clamped to max single change limit of +${maxSingleChangePercent}%]`;
-        } else if (recommendedPrice < minAllowed) {
-          recommendedPrice = minAllowed;
-          reasoning += ` [Clamped to max single change limit of -${maxSingleChangePercent}%]`;
+        // Fallback or external strategy additional clamp check if not already performed
+        if (!wasClamped) {
+          const maxDelta = product.currentPrice * (maxSingleChangePercent / 100);
+          const maxAllowed = Math.round((product.currentPrice + maxDelta) * 100) / 100;
+          const minAllowed = Math.round((product.currentPrice - maxDelta) * 100) / 100;
+
+          if (recommendedPrice > maxAllowed) {
+            recommendedPrice = maxAllowed;
+            wasClamped = true;
+            clampReason = `Clamped to max single change limit of +${maxSingleChangePercent}%`;
+            reasoning += ` [${clampReason}]`;
+          } else if (recommendedPrice < minAllowed) {
+            recommendedPrice = minAllowed;
+            wasClamped = true;
+            clampReason = `Clamped to max single change limit of -${maxSingleChangePercent}%`;
+            reasoning += ` [${clampReason}]`;
+          }
         }
+
+        const outcome = pSuggestion.isFallback
+          ? 'FALLBACK'
+          : (wasClamped ? 'clamped_by_policy' : (pSuggestion.outcome || 'success'));
 
         try {
           await PricingSuggestion.create({
             productId: product._id,
             currentPrice: product.currentPrice,
             recommendedPrice,
+            rawRecommendedPrice,
+            rawPrice: rawRecommendedPrice,
+            wasClamped,
+            clampReason,
+            outcome,
             direction: pSuggestion.direction,
             confidence: pSuggestion.confidence,
             reasoning,
@@ -168,13 +211,23 @@ export async function processInventoryChange(product) {
 
       if (!existingReorder) {
         const rSuggestion = await strategy.suggestReorder(product, triggerReason);
+        const rawQuantity = rSuggestion.rawRecommendedQuantity ?? rSuggestion.rawQuantity ?? rSuggestion.recommendedQuantity;
+        const outcome = rSuggestion.isFallback
+          ? 'FALLBACK'
+          : (rSuggestion.wasClamped ? 'clamped_by_policy' : (rSuggestion.outcome || 'success'));
+
         try {
           await ReorderSuggestion.create({
             productId: product._id,
             currentStock: product.stockLevel,
             stockAtGeneration: product.stockLevel,
             recommendedQuantity: rSuggestion.recommendedQuantity,
-            suggestedLeadTimeDays: rSuggestion.suggestedLeadTimeDays,
+            rawRecommendedQuantity: rawQuantity,
+            rawQuantity,
+            wasClamped: Boolean(rSuggestion.wasClamped),
+            clampReason: rSuggestion.clampReason || null,
+            outcome,
+            suggestedLeadTimeDays: rSuggestion.suggestedLeadTimeDays ?? 7,
             confidence: rSuggestion.confidence,
             reasoning: rSuggestion.reasoning,
             status: 'PENDING',

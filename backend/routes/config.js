@@ -102,6 +102,8 @@ router.get('/advisor-health', async (req, res) => {
     const fallbackCountsByReason = {
       TIMEOUT: 0,
       MALFORMED_JSON: 0,
+      SCHEMA_INVALID: 0,
+      IMPLAUSIBLE_OUTPUT: 0,
       OUT_OF_BOUNDS: 0,
       RATE_LIMITED: 0,
       CIRCUIT_OPEN: 0,

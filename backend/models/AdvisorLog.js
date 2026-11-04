@@ -63,8 +63,16 @@ const advisorLogSchema = new mongoose.Schema({
     type: String, 
     enum: [
       'success',
-      'timeout', 'malformed_json', 'out_of_bounds_clamped', 'api_error',
-      'TIMEOUT', 'MALFORMED_JSON', 'OUT_OF_BOUNDS', 'RATE_LIMITED', 'CIRCUIT_OPEN', 'UPSTREAM_ERROR'
+      'clamped_by_policy', 'CLAMPED_BY_POLICY',
+      'schema_invalid', 'SCHEMA_INVALID',
+      'implausible_output', 'IMPLAUSIBLE_OUTPUT',
+      'malformed_json', 'MALFORMED_JSON',
+      'timeout', 'TIMEOUT',
+      'rate_limited', 'RATE_LIMITED',
+      'circuit_open', 'CIRCUIT_OPEN',
+      'api_error', 'UPSTREAM_ERROR',
+      'rejected_by_policy', 'REJECTED_BY_POLICY',
+      'out_of_bounds_clamped'
     ], 
     required: false,
     index: true
@@ -73,10 +81,22 @@ const advisorLogSchema = new mongoose.Schema({
   fellBack: { type: Boolean, required: false, default: false },
   fallbackReason: { 
     type: String, 
-    enum: ['TIMEOUT', 'MALFORMED_JSON', 'OUT_OF_BOUNDS', 'RATE_LIMITED', 'CIRCUIT_OPEN', 'UPSTREAM_ERROR', null],
+    enum: [
+      'SCHEMA_INVALID',
+      'IMPLAUSIBLE_OUTPUT',
+      'MALFORMED_JSON',
+      'TIMEOUT',
+      'RATE_LIMITED',
+      'CIRCUIT_OPEN',
+      'UPSTREAM_ERROR',
+      'OUT_OF_BOUNDS',
+      null
+    ],
     required: false,
     index: true
   },
+  wasClamped: { type: Boolean, default: false },
+  clampReason: { type: String, default: null },
   actedBy: { type: String, required: false, default: null },
   inputDetails: { type: mongoose.Schema.Types.Mixed, required: false },
   outputDetails: { type: mongoose.Schema.Types.Mixed, required: false }

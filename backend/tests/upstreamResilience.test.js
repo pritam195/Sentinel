@@ -166,7 +166,7 @@ export async function runResilienceTests() {
 
   // 5. AdvisorLog fallbackReason Enum Validation
   console.log('\n5. TESTING ADVISORLOG FALLBACK REASON ENUM RECORDING...');
-  const expectedReasons = ['TIMEOUT', 'MALFORMED_JSON', 'OUT_OF_BOUNDS', 'RATE_LIMITED', 'CIRCUIT_OPEN', 'UPSTREAM_ERROR'];
+  const expectedReasons = ['TIMEOUT', 'MALFORMED_JSON', 'SCHEMA_INVALID', 'IMPLAUSIBLE_OUTPUT', 'RATE_LIMITED', 'CIRCUIT_OPEN', 'UPSTREAM_ERROR'];
 
   const faultDefinitions = [
     {
@@ -183,7 +183,11 @@ export async function runResilienceTests() {
       fn: () => Promise.resolve('plain text response with no json')
     },
     {
-      reason: 'OUT_OF_BOUNDS',
+      reason: 'SCHEMA_INVALID',
+      fn: () => Promise.resolve(JSON.stringify({ direction: 'INCREASE', confidence: 0.9, reasoning: 'missing price' }))
+    },
+    {
+      reason: 'IMPLAUSIBLE_OUTPUT',
       fn: () => Promise.resolve(JSON.stringify({ recommendedPrice: 99999, direction: 'INCREASE', confidence: 0.9, reasoning: 'huge' }))
     },
     {
@@ -241,6 +245,8 @@ export async function runResilienceTests() {
   const fallbackCountsByReason = {
     TIMEOUT: 0,
     MALFORMED_JSON: 0,
+    SCHEMA_INVALID: 0,
+    IMPLAUSIBLE_OUTPUT: 0,
     OUT_OF_BOUNDS: 0,
     RATE_LIMITED: 0,
     CIRCUIT_OPEN: 0,
