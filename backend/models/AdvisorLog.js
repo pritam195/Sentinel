@@ -38,13 +38,22 @@ const advisorLogSchema = new mongoose.Schema({
   },
   outcome: { 
     type: String, 
-    enum: ['success', 'timeout', 'malformed_json', 'out_of_bounds_clamped', 'api_error'], 
+    enum: [
+      'success',
+      'timeout', 'malformed_json', 'out_of_bounds_clamped', 'api_error',
+      'TIMEOUT', 'MALFORMED_JSON', 'OUT_OF_BOUNDS', 'RATE_LIMITED', 'CIRCUIT_OPEN', 'UPSTREAM_ERROR'
+    ], 
     required: false,
     index: true
   },
   latencyMs: { type: Number, required: false },
   fellBack: { type: Boolean, required: false, default: false },
-  fallbackReason: { type: String, required: false },
+  fallbackReason: { 
+    type: String, 
+    enum: ['TIMEOUT', 'MALFORMED_JSON', 'OUT_OF_BOUNDS', 'RATE_LIMITED', 'CIRCUIT_OPEN', 'UPSTREAM_ERROR', null],
+    required: false,
+    index: true
+  },
   inputDetails: { type: mongoose.Schema.Types.Mixed, required: false },
   outputDetails: { type: mongoose.Schema.Types.Mixed, required: false }
 }, { timestamps: true });

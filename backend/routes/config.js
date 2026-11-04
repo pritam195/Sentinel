@@ -1,5 +1,11 @@
 import express from 'express';
 import Config from '../models/Config.js';
+import AdvisorLog from '../models/AdvisorLog.js';
+import {
+  globalCircuitBreaker,
+  globalSemaphore,
+  globalRetryHandler
+} from '../services/resilience.js';
 
 const router = express.Router();
 
@@ -38,6 +44,46 @@ router.patch('/strategy', async (req, res) => {
     
     await config.save();
     res.json(config);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /config/advisor-health
+router.get('/advisor-health', async (req, res) => {
+  try {
+    const breakerDetails = globalCircuitBreaker.getDetails();
+    const limiterStats = globalSemaphore.getStats();
+    const retryStats = globalRetryHandler.getStats();
+
+    // Query fallback counts grouped by reason from AdvisorLog
+    const fallbackAggregation = await AdvisorLog.aggregate([
+      { $match: { fellBack: true, fallbackReason: { $ne: null } } },
+      { $group: { _id: '$fallbackReason', count: { $sum: 1 } } }
+    ]);
+
+    const fallbackCountsByReason = {
+      TIMEOUT: 0,
+      MALFORMED_JSON: 0,
+      OUT_OF_BOUNDS: 0,
+      RATE_LIMITED: 0,
+      CIRCUIT_OPEN: 0,
+      UPSTREAM_ERROR: 0
+    };
+
+    for (const item of fallbackAggregation) {
+      if (item._id && Object.prototype.hasOwnProperty.call(fallbackCountsByReason, item._id)) {
+        fallbackCountsByReason[item._id] = item.count;
+      }
+    }
+
+    res.json({
+      breakerState: breakerDetails.state,
+      circuitBreaker: breakerDetails,
+      concurrencyLimiter: limiterStats,
+      retryStats,
+      fallbackCountsByReason
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

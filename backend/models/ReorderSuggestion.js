@@ -8,7 +8,9 @@ const reorderSuggestionSchema = new mongoose.Schema({
   confidence: { type: Number, min: 0, max: 1, required: true },
   reasoning: { type: String, required: true },
   status: { type: String, enum: ['PENDING', 'ACCEPTED', 'REJECTED'], default: 'PENDING' },
-  triggerReason: { type: String, enum: ['INITIAL', 'INVENTORY_LOW', 'DEMAND_SPIKE', 'MANUAL'], required: true }
+  triggerReason: { type: String, enum: ['INITIAL', 'INVENTORY_LOW', 'DEMAND_SPIKE', 'MANUAL'], required: true },
+  isFallback: { type: Boolean, default: false },
+  fallbackReason: { type: String, default: null }
 }, { timestamps: true });
 
 reorderSuggestionSchema.index(

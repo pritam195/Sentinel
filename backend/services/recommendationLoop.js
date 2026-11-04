@@ -92,7 +92,9 @@ export async function processInventoryChange(product) {
             confidence: pSuggestion.confidence,
             reasoning: pSuggestion.reasoning,
             status: 'PENDING',
-            triggerReason
+            triggerReason,
+            isFallback: Boolean(pSuggestion.isFallback),
+            fallbackReason: pSuggestion.fallbackReason || null
           });
         } catch (err) {
           if (isDuplicateKeyError(err)) {
@@ -114,7 +116,9 @@ export async function processInventoryChange(product) {
             confidence: rSuggestion.confidence,
             reasoning: rSuggestion.reasoning,
             status: 'PENDING',
-            triggerReason
+            triggerReason,
+            isFallback: Boolean(rSuggestion.isFallback),
+            fallbackReason: rSuggestion.fallbackReason || null
           });
         } catch (err) {
           if (isDuplicateKeyError(err)) {

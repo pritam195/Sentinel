@@ -14,16 +14,28 @@ class AIAdvisor extends CommerceAdvisor {
 
   _classifyError(error) {
     const msg = error?.message || '';
-    if (error?.name === 'AbortError' || msg.includes('timed out') || msg.includes('timeout')) {
-      return 'timeout';
+    const code = error?.code || '';
+    let reason = 'UPSTREAM_ERROR';
+    let outcome = 'api_error';
+
+    if (code === 'CIRCUIT_OPEN' || msg.includes('Circuit breaker is OPEN') || msg.includes('CIRCUIT_OPEN')) {
+      reason = 'CIRCUIT_OPEN';
+      outcome = 'api_error';
+    } else if (code === 'RATE_LIMITED' || msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
+      reason = 'RATE_LIMITED';
+      outcome = 'api_error';
+    } else if (code === 'TIMEOUT' || error?.name === 'AbortError' || msg.includes('timed out') || msg.includes('timeout')) {
+      reason = 'TIMEOUT';
+      outcome = 'timeout';
+    } else if (code === 'MALFORMED_JSON' || msg.includes('did not contain JSON') || error instanceof SyntaxError || msg.includes('Unexpected token')) {
+      reason = 'MALFORMED_JSON';
+      outcome = 'malformed_json';
+    } else if (code === 'OUT_OF_BOUNDS' || msg.includes('failed safety validation') || msg.includes('out of bounds') || msg.includes('clamp')) {
+      reason = 'OUT_OF_BOUNDS';
+      outcome = 'out_of_bounds_clamped';
     }
-    if (msg.includes('did not contain JSON') || error instanceof SyntaxError || msg.includes('Unexpected token')) {
-      return 'malformed_json';
-    }
-    if (msg.includes('failed safety validation') || msg.includes('out of bounds') || msg.includes('clamp')) {
-      return 'out_of_bounds_clamped';
-    }
-    return 'api_error';
+
+    return { reason, outcome };
   }
 
   async suggestPricing(product, categoryAverageVelocity, triggerReason) {
@@ -45,6 +57,7 @@ class AIAdvisor extends CommerceAdvisor {
           outcome: 'success',
           latencyMs,
           fellBack: false,
+          fallbackReason: null,
           inputDetails: {
             currentPrice: product.currentPrice,
             stockLevel: product.stockLevel,
@@ -56,11 +69,15 @@ class AIAdvisor extends CommerceAdvisor {
         console.error('[AIAdvisor] Log error:', logErr.message);
       }
 
-      return result;
+      return {
+        ...result,
+        isFallback: false,
+        fallbackReason: null
+      };
     } catch (error) {
       const latencyMs = performance.now() - startTime;
-      const outcome = this._classifyError(error);
-      const fallback = await this._fallbackPricing(product, categoryAverageVelocity, triggerReason, error);
+      const { reason, outcome } = this._classifyError(error);
+      const fallback = await this._fallbackPricing(product, categoryAverageVelocity, triggerReason, reason, error);
 
       try {
         await recordAICall({
@@ -72,7 +89,7 @@ class AIAdvisor extends CommerceAdvisor {
           outcome,
           latencyMs,
           fellBack: true,
-          fallbackReason: error.message,
+          fallbackReason: reason,
           inputDetails: {
             currentPrice: product.currentPrice,
             stockLevel: product.stockLevel,
@@ -107,16 +124,21 @@ class AIAdvisor extends CommerceAdvisor {
           outcome: 'success',
           latencyMs,
           fellBack: false,
+          fallbackReason: null,
           outputDetails: result
         });
       } catch (logErr) {}
 
-      return result;
+      return {
+        ...result,
+        isFallback: false,
+        fallbackReason: null
+      };
     } catch (error) {
       const latencyMs = performance.now() - startTime;
-      const outcome = this._classifyError(error);
-      if (onChunk) onChunk(`\n[AI unavailable; using safe rule-based fallback: ${error.message}]\n`);
-      const fallback = await this._fallbackPricing(product, categoryAverageVelocity, triggerReason, error);
+      const { reason, outcome } = this._classifyError(error);
+      if (onChunk) onChunk(`\n[AI unavailable (${reason}); using safe rule-based fallback]\n`);
+      const fallback = await this._fallbackPricing(product, categoryAverageVelocity, triggerReason, reason, error);
 
       try {
         await recordAICall({
@@ -128,7 +150,7 @@ class AIAdvisor extends CommerceAdvisor {
           outcome,
           latencyMs,
           fellBack: true,
-          fallbackReason: error.message,
+          fallbackReason: reason,
           outputDetails: fallback
         });
       } catch (logErr) {}
@@ -156,6 +178,7 @@ class AIAdvisor extends CommerceAdvisor {
           outcome: 'success',
           latencyMs,
           fellBack: false,
+          fallbackReason: null,
           inputDetails: {
             stockLevel: product.stockLevel,
             reorderThreshold: product.reorderThreshold,
@@ -165,14 +188,20 @@ class AIAdvisor extends CommerceAdvisor {
         });
       } catch (logErr) {}
 
-      return result;
+      return {
+        ...result,
+        isFallback: false,
+        fallbackReason: null
+      };
     } catch (error) {
       const latencyMs = performance.now() - startTime;
-      const outcome = this._classifyError(error);
+      const { reason, outcome } = this._classifyError(error);
       const fallbackBase = await this.fallbackAdvisor.suggestReorder(product, triggerReason);
       const fallback = {
         ...fallbackBase,
-        reasoning: `[Fallback — AI unavailable: ${error.message}] ${fallbackBase.reasoning}`
+        isFallback: true,
+        fallbackReason: reason,
+        reasoning: `[Fallback: ${reason} — AI unavailable: ${error.message}] ${fallbackBase.reasoning}`
       };
 
       try {
@@ -185,7 +214,7 @@ class AIAdvisor extends CommerceAdvisor {
           outcome,
           latencyMs,
           fellBack: true,
-          fallbackReason: error.message,
+          fallbackReason: reason,
           inputDetails: {
             stockLevel: product.stockLevel,
             reorderThreshold: product.reorderThreshold,
@@ -199,9 +228,14 @@ class AIAdvisor extends CommerceAdvisor {
     }
   }
 
-  async _fallbackPricing(product, categoryAverageVelocity, triggerReason, error) {
+  async _fallbackPricing(product, categoryAverageVelocity, triggerReason, reason, error) {
     const fallback = await this.fallbackAdvisor.suggestPricing(product, categoryAverageVelocity, triggerReason);
-    return { ...fallback, reasoning: `[Fallback — AI unavailable: ${error.message}] ${fallback.reasoning}` };
+    return {
+      ...fallback,
+      isFallback: true,
+      fallbackReason: reason,
+      reasoning: `[Fallback: ${reason} — AI unavailable: ${error.message}] ${fallback.reasoning}`
+    };
   }
 
   _buildPricingPrompt(product, categoryAverageVelocity, triggerReason) {
@@ -228,8 +262,18 @@ Demand velocity (orders in 24h): ${product.demandVelocity}; category average: ${
 
   _parseJSONResponse(text) {
     const match = String(text).trim().match(/\{[\s\S]*\}/);
-    if (!match) throw new Error('AI response did not contain JSON');
-    return JSON.parse(match[0]);
+    if (!match) {
+      const err = new Error('AI response did not contain JSON');
+      err.code = 'MALFORMED_JSON';
+      throw err;
+    }
+    try {
+      return JSON.parse(match[0]);
+    } catch (e) {
+      const err = new Error(`Malformed JSON: ${e.message}`);
+      err.code = 'MALFORMED_JSON';
+      throw err;
+    }
   }
 
   _validatePricing(value, product) {
@@ -240,7 +284,9 @@ Demand velocity (orders in 24h): ${product.demandVelocity}; category average: ${
       !allowedDirections.includes(value.direction) ||
       !Number.isFinite(Number(value.confidence)) || Number(value.confidence) < 0 || Number(value.confidence) > 1 ||
       typeof value.reasoning !== 'string' || !value.reasoning.trim()) {
-      throw new Error('AI pricing response failed safety validation');
+      const err = new Error('AI pricing response failed safety validation');
+      err.code = 'OUT_OF_BOUNDS';
+      throw err;
     }
     const cleanReasoning = value.reasoning.trim().replace(/^\[AI Analysis\]\s*/i, '');
     return { 
@@ -258,7 +304,9 @@ Demand velocity (orders in 24h): ${product.demandVelocity}; category average: ${
       !Number.isInteger(suggestedLeadTimeDays) || suggestedLeadTimeDays < 1 || suggestedLeadTimeDays > 365 ||
       !Number.isFinite(Number(value.confidence)) || Number(value.confidence) < 0 || Number(value.confidence) > 1 ||
       typeof value.reasoning !== 'string' || !value.reasoning.trim()) {
-      throw new Error('AI reorder response failed safety validation');
+      const err = new Error('AI reorder response failed safety validation');
+      err.code = 'OUT_OF_BOUNDS';
+      throw err;
     }
     const cleanReasoning = value.reasoning.trim().replace(/^\[AI Analysis\]\s*/i, '');
     return { 

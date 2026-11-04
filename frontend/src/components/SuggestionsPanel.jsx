@@ -45,8 +45,13 @@ export default function SuggestionsPanel({
     setExpandedIds(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
+  const isItemFallback = (item) => {
+    return Boolean(item.isFallback || item.reasoning?.includes('[Fallback'));
+  };
+
   const isItemAI = (item) => {
-    const isFallback = item.reasoning?.includes('[Fallback');
+    const isFallback = isItemFallback(item);
+    if (isFallback) return false;
     const isExplicitAI = item.reasoning?.includes('[AI');
     const isRulePattern = 
       item.reasoning?.includes('Inventory is critically low') ||
@@ -54,20 +59,28 @@ export default function SuggestionsPanel({
       item.reasoning?.includes('Standard rule-based replenishment') ||
       item.reasoning?.includes('No pricing rules fired');
     
-    return isExplicitAI || (!isRulePattern && !isFallback);
+    return isExplicitAI || !isRulePattern;
   };
 
   // Filter lists according to active engine or show all
   const filteredPricing = pricingSuggestions.filter(item => {
     if (filterMode === 'all') return true;
+    const isFallback = isItemFallback(item);
     const itemIsAI = isItemAI(item);
-    return activeStrategy === 'ai' ? itemIsAI : !itemIsAI;
+    if (activeStrategy === 'ai') {
+      return itemIsAI || isFallback;
+    }
+    return !itemIsAI && !isFallback;
   });
 
   const filteredReorder = reorderSuggestions.filter(item => {
     if (filterMode === 'all') return true;
+    const isFallback = isItemFallback(item);
     const itemIsAI = isItemAI(item);
-    return activeStrategy === 'ai' ? itemIsAI : !itemIsAI;
+    if (activeStrategy === 'ai') {
+      return itemIsAI || isFallback;
+    }
+    return !itemIsAI && !isFallback;
   });
 
   const allSuggestionsCount = pricingSuggestions.length + reorderSuggestions.length;
@@ -78,17 +91,10 @@ export default function SuggestionsPanel({
     const triggerClass = `trigger-accent-${item.triggerReason.toLowerCase()}`;
     const product = item.productId || {};
     
-    const isFallback = item.reasoning?.includes('[Fallback');
-    const isExplicitAI = item.reasoning?.includes('[AI');
-    const isRulePattern = 
-      item.reasoning?.includes('Inventory is critically low') ||
-      item.reasoning?.includes('Demand is significantly higher') ||
-      item.reasoning?.includes('Standard rule-based replenishment') ||
-      item.reasoning?.includes('No pricing rules fired');
-    
-    const isAI = isExplicitAI || (!isRulePattern && !isFallback);
-    const sourceClass = isAI ? 'ai' : (isFallback ? 'fallback' : 'rule');
-    const sourceLabel = isAI ? 'AI' : (isFallback ? 'FALLBACK' : 'RULE');
+    const isFallback = isItemFallback(item);
+    const isAI = isItemAI(item);
+    const sourceClass = isFallback ? 'fallback' : (isAI ? 'ai' : 'rule');
+    const sourceLabel = isFallback ? 'AI FALLBACK' : (isAI ? 'AI' : 'RULE');
     
     const isUp = isPricing ? item.recommendedPrice > item.currentPrice : true;
     
@@ -101,6 +107,13 @@ export default function SuggestionsPanel({
           <span className="suggestion-product-name">{product.name || 'Unknown Product'}</span>
           <span className={`source-badge ${sourceClass}`}>{sourceLabel}</span>
         </div>
+
+        {activeStrategy === 'ai' && isFallback && (
+          <div className="fallback-warning-pill">
+            <span className="fallback-warning-icon">⚠️</span>
+            <span>Fallback used: upstream LLM unavailable {item.fallbackReason ? `(${item.fallbackReason})` : ''}</span>
+          </div>
+        )}
         
         <div className="suggestion-delta">
           <span className="old-val" style={{ opacity: 0.6 }}>
@@ -157,37 +170,64 @@ export default function SuggestionsPanel({
   };
 
   return (
-    <div>
-      <div className="rail-header">
-        <span>Actionable Insights</span>
-        <div className="filter-pill-group">
+    <div className="card">
+      <div className="suggestions-header-compact">
+        <div className="suggestions-title-group">
+          <span className="section-title">Human-in-the-Loop Review Queue</span>
+          <span className="queue-count-badge">{filteredCount}</span>
+        </div>
+
+        <div className="filter-pill-toggle">
           <button 
-            className={`pill-btn ${filterMode === 'active' ? (activeStrategy === 'ai' ? 'active' : 'active rule-pill') : ''}`}
+            className={`filter-pill ${filterMode === 'active' ? 'active' : ''}`}
             onClick={() => setFilterMode('active')}
           >
-            {activeStrategy === 'ai' ? 'AI Only' : 'Rules Only'}
+            Active Engine ({activeStrategy.toUpperCase()})
           </button>
           <button 
-            className={`pill-btn ${filterMode === 'all' ? 'active' : ''}`}
+            className={`filter-pill ${filterMode === 'all' ? 'active' : ''}`}
             onClick={() => setFilterMode('all')}
           >
-            All ({allSuggestionsCount})
+            All Suggestions ({allSuggestionsCount})
           </button>
         </div>
       </div>
-      
-      {filteredCount === 0 ? (
-        <div className="empty-state" style={{ border: '1px solid var(--border-hairline)' }}>
-          {allSuggestionsCount === 0 
-            ? 'No signals — all products within normal range.' 
-            : `No pending ${activeStrategy === 'ai' ? 'AI Advisor' : 'Rule-Based'} suggestions.`}
+
+      <div className="suggestions-columns-container">
+        {/* Pricing Suggestions Column */}
+        <div className="suggestions-col">
+          <div className="col-header">
+            <span className="col-title">Price Adjustments</span>
+            <span className="col-count">{filteredPricing.length}</span>
+          </div>
+          <div className="suggestions-scrollable">
+            {filteredPricing.length === 0 ? (
+              <div className="empty-queue-msg">No pending price adjustments</div>
+            ) : (
+              filteredPricing.map(item => (
+                <CompactSuggestionRow key={item._id} item={item} type="pricing" />
+              ))
+            )}
+          </div>
         </div>
-      ) : (
-        <div>
-          {filteredPricing.map(s => <CompactSuggestionRow key={s._id} item={s} type="pricing" />)}
-          {filteredReorder.map(s => <CompactSuggestionRow key={s._id} item={s} type="reorder" />)}
+
+        {/* Reorder Suggestions Column */}
+        <div className="suggestions-col">
+          <div className="col-header">
+            <span className="col-title">Replenishment Orders</span>
+            <span className="col-count">{filteredReorder.length}</span>
+          </div>
+          <div className="suggestions-scrollable">
+            {filteredReorder.length === 0 ? (
+              <div className="empty-queue-msg">No pending replenishment orders</div>
+            ) : (
+              filteredReorder.map(item => (
+                <CompactSuggestionRow key={item._id} item={item} type="reorder" />
+              ))
+            )}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

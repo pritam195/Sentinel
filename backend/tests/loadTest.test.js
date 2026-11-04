@@ -8,9 +8,14 @@ import InventorySnapshot from '../models/InventorySnapshot.js';
 import Config from '../models/Config.js';
 import AdvisorLog from '../models/AdvisorLog.js';
 import inventoryEvents from '../events/inventoryEvents.js';
-import '../services/recommendationLoop.js';
+import { inFlightLocks } from '../services/recommendationLoop.js';
 import { recordInventorySnapshot } from '../services/inventorySnapshots.js';
 import { getMetricsSummary } from '../services/metrics.js';
+import {
+  globalCircuitBreaker,
+  globalSemaphore,
+  globalRetryHandler
+} from '../services/resilience.js';
 
 dotenv.config();
 
@@ -57,21 +62,18 @@ function generate500Products(count = 520) {
     const price = Math.round((minPrice + Math.random() * (maxPrice - minPrice)) * 100) / 100;
     const cost = Math.round(price * template.costRatio * 100) / 100;
 
-    // Distribute stock states: 10% critical/low, 15% demand surge, 75% normal
+    // Distribute stock states: 12% critical/low, 15% demand surge, 73% normal
     let stockLevel;
     let demandVelocity;
     const rand = Math.random();
 
     if (rand < 0.12) {
-      // Low / near stockout
       stockLevel = Math.floor(Math.random() * 8) + 1; // 1 to 8
       demandVelocity = Math.floor(Math.random() * 8) + 3;
-    } else if (rand < 0.25) {
-      // Demand surge
+    } else if (rand < 0.27) {
       stockLevel = Math.floor(Math.random() * 30) + 15;
       demandVelocity = Math.floor(Math.random() * 20) + 15; // 15 to 35
     } else {
-      // Normal
       stockLevel = Math.floor(Math.random() * 80) + 20;
       demandVelocity = Math.floor(Math.random() * 5) + 1;
     }
@@ -102,8 +104,12 @@ export async function runLoadAndScaleTest(targetProductCount = 520, numOrderSimu
   await mongoose.connect(MONGO_URI);
 
   // Configure engine to test both AI and Rules under load
-  // First run with AI strategy to evaluate latency & fallback percentiles
   await Config.findOneAndUpdate({}, { activeStrategy: 'ai', demandSpikeMultiplier: 3 }, { upsert: true });
+
+  // Reset resilience tracking
+  globalCircuitBreaker.reset();
+  globalSemaphore.reset();
+  globalRetryHandler.resetStats();
 
   console.log(`\n1. SEEDING CATALOG WITH ${targetProductCount} PRODUCTS...`);
   await Product.deleteMany({ sku: { $regex: /^SKU-/ } });
@@ -156,7 +162,6 @@ export async function runLoadAndScaleTest(targetProductCount = 520, numOrderSimu
 
   let orderCount = 0;
   for (let i = 0; i < numOrderSimulations; i++) {
-    // Pick random product
     const product = createdProducts[Math.floor(Math.random() * createdProducts.length)];
     const qty = Math.floor(Math.random() * 4) + 1; // 1 to 4 units
 
@@ -172,12 +177,16 @@ export async function runLoadAndScaleTest(targetProductCount = 520, numOrderSimu
 
     // Yield small time every 10 events to allow async loop concurrency
     if (i % 10 === 0) {
-      await new Promise((r) => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 60));
     }
   }
 
   console.log(`Dispatched ${orderCount} order operations. Waiting for async advisor loop to settle...`);
-  await new Promise((r) => setTimeout(r, 6000));
+  const waitStart = performance.now();
+  while (inFlightLocks.size > 0 && performance.now() - waitStart < 25000) {
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  await new Promise((r) => setTimeout(r, 1000));
 
   const totalSimElapsedMs = performance.now() - simStartTime;
 
@@ -186,6 +195,21 @@ export async function runLoadAndScaleTest(targetProductCount = 520, numOrderSimu
   const finalReorderCount = await ReorderSuggestion.countDocuments({});
   const finalSnapshotCount = await InventorySnapshot.countDocuments({});
   const metricsSummary = await getMetricsSummary();
+  const retryStats = globalRetryHandler.getStats();
+  const breakerDetails = globalCircuitBreaker.getDetails();
+
+  // Aggregate fallback reasons
+  const fallbackAgg = await AdvisorLog.aggregate([
+    { $match: { fellBack: true, fallbackReason: { $ne: null } } },
+    { $group: { _id: '$fallbackReason', count: { $sum: 1 } } }
+  ]);
+  const fallbackBreakdown = {};
+  for (const item of fallbackAgg) {
+    fallbackBreakdown[item._id] = item.count;
+  }
+
+  const callsBypassedByBreaker = fallbackBreakdown.CIRCUIT_OPEN || 0;
+  const callsReachedGemini = Math.max(0, metricsSummary.totalAICalls - callsBypassedByBreaker);
 
   console.log('\n===============================================================');
   console.log('                 SCALE & LOAD TEST RESULTS                     ');
@@ -198,10 +222,17 @@ export async function runLoadAndScaleTest(targetProductCount = 520, numOrderSimu
   console.log(`Total Suggestions Generated:       ${finalPricingCount + finalReorderCount}`);
   console.log(`Total Triggers Fired:              ${metricsSummary.totalTriggers}`);
   console.log('Triggers by Type:', metricsSummary.triggersByType);
-  console.log('\n--- LLM ADVISOR METRICS & LATENCY ---');
-  console.log(`Total AI Advisor Calls:            ${metricsSummary.totalAICalls}`);
-  console.log(`AI Calls Fallback Count:           ${metricsSummary.fallbackCount}`);
+  console.log('\n--- UPSTREAM RESILIENCE & ADVISOR METRICS ---');
+  console.log(`Total Advisor Requests:            ${metricsSummary.totalAICalls}`);
+  console.log(`Calls that reached Gemini API:     ${callsReachedGemini}`);
+  console.log(`Calls bypassed by Circuit Breaker: ${callsBypassedByBreaker}`);
+  console.log(`Total Retry Attempts:              ${retryStats.totalRetries}`);
+  console.log(`Retried Successfully:              ${retryStats.successfulRetries}`);
+  console.log(`Exhausted Retries:                 ${retryStats.exhaustedRetries}`);
+  console.log(`Total Fell Back:                   ${metricsSummary.fallbackCount}`);
   console.log(`AI Fallback Rate:                  ${metricsSummary.fallbackRatePct}%`);
+  console.log('Fallback Count by Reason:', fallbackBreakdown);
+  console.log(`Circuit Breaker State:             ${breakerDetails.state}`);
   console.log(`AI Latency (Min):                  ${metricsSummary.latency.minMs.toFixed(2)}ms`);
   console.log(`AI Latency (Median):               ${metricsSummary.latency.medianMs.toFixed(2)}ms`);
   console.log(`AI Latency (P90):                  ${metricsSummary.latency.p90Ms.toFixed(2)}ms`);
@@ -224,8 +255,13 @@ export async function runLoadAndScaleTest(targetProductCount = 520, numOrderSimu
     triggers: metricsSummary.totalTriggers,
     triggersByType: metricsSummary.triggersByType,
     aiCalls: metricsSummary.totalAICalls,
+    callsReachedGemini,
+    callsBypassedByBreaker,
+    retryStats,
     fallbackCount: metricsSummary.fallbackCount,
     fallbackRatePct: metricsSummary.fallbackRatePct,
+    fallbackBreakdown,
+    breakerState: breakerDetails.state,
     latency: metricsSummary.latency,
     snapshotOverhead: {
       pureUpdatePerWriteMs: (pureUpdateMs / snapshotBenchmarkCount).toFixed(2),

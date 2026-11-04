@@ -411,7 +411,24 @@ body {
   border-radius: 2px;
 }
 .source-badge.ai { color: var(--signal-blue); background-color: rgba(91, 155, 213, 0.1); }
-.source-badge.fallback { color: var(--signal-amber); background-color: rgba(210, 153, 34, 0.15); }
+.source-badge.fallback { color: var(--signal-amber); background-color: rgba(210, 153, 34, 0.2); border: 1px solid rgba(210, 153, 34, 0.4); font-weight: 600; }
+
+.fallback-warning-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--signal-amber);
+  background-color: rgba(210, 153, 34, 0.12);
+  border: 1px solid rgba(210, 153, 34, 0.35);
+  border-radius: 4px;
+  padding: 4px 8px;
+  margin-bottom: var(--space-2);
+  font-weight: 500;
+}
+.fallback-warning-icon {
+  font-size: 12px;
+}
 .source-badge.rule { color: var(--text-muted); background-color: rgba(139, 146, 160, 0.1); }
 
 .suggestion-delta {
