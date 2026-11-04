@@ -6,8 +6,7 @@ import mongoose from 'mongoose';
  *
  * ENFORCEMENT LEVEL:
  * This constraint is enforced at the APPLICATION LEVEL via Mongoose pre-hooks below.
- * It is NOT database-enforced by MongoDB itself; direct database drivers, administrative scripts,
- * or raw shell commands with write privileges can bypass these application hooks.
+ * KNOWN LIMITATION: Model.collection.* and raw MongoDB drivers bypass Mongoose middleware hooks.
  *
  * TO ENFORCE AT THE DATABASE LEVEL IN PRODUCTION MONGODB:
  * Configure a custom MongoDB role granting only 'find' and 'insert' privileges on this collection:
@@ -15,6 +14,7 @@ import mongoose from 'mongoose';
  * db.createRole({
  *   role: "appendOnlyAuditRole",
  *   privileges: [
+ *     { resource: { db: "sentinel", collection: "inventorysnapshots" }, actions: [ "find", "insert" ] },
  *     { resource: { db: "sentinel", collection: "advisorlogs" }, actions: [ "find", "insert" ] }
  *   ],
  *   roles: []
@@ -103,6 +103,22 @@ advisorLogSchema.pre('save', function () {
   if (!this.isNew) {
     throw new Error('AdvisorLog is append-only: document updates are disallowed at the application level.');
   }
+});
+
+// Model middleware disallowing mutative operations within bulkWrite
+advisorLogSchema.pre('bulkWrite', function (ops, options) {
+  if (options && options.bypassAuditGuard === true) return;
+  if (!Array.isArray(ops)) return;
+  for (const op of ops) {
+    if (op.updateOne || op.updateMany || op.replaceOne || op.deleteOne || op.deleteMany) {
+      throw new Error('AdvisorLog is append-only: updates and deletes in bulkWrite are disallowed at the application level.');
+    }
+  }
+});
+
+// Model middleware explicitly handling insertMany
+advisorLogSchema.pre('insertMany', function (docs, options) {
+  // insertMany is allowed as an append operation in this append-only collection
 });
 
 export default mongoose.model('AdvisorLog', advisorLogSchema);

@@ -152,6 +152,7 @@ export async function processInventoryChange(product) {
             triggerReason,
             isFallback: Boolean(pSuggestion.isFallback),
             fallbackReason: pSuggestion.fallbackReason || null,
+            priceVersion: product.priceVersion || 1,
             productVersion,
             productUpdatedAt,
             expiresAt
@@ -171,6 +172,7 @@ export async function processInventoryChange(product) {
           await ReorderSuggestion.create({
             productId: product._id,
             currentStock: product.stockLevel,
+            stockAtGeneration: product.stockLevel,
             recommendedQuantity: rSuggestion.recommendedQuantity,
             suggestedLeadTimeDays: rSuggestion.suggestedLeadTimeDays,
             confidence: rSuggestion.confidence,

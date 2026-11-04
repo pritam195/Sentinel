@@ -102,22 +102,20 @@ export async function runAuthAndAuditTests() {
       reasoning: 'Protect scarce inventory',
       status: 'PENDING',
       triggerReason: 'INVENTORY_LOW',
-      productVersion: testProduct.__v ?? 0,
-      productUpdatedAt: testProduct.updatedAt,
+      priceVersion: testProduct.priceVersion || 1,
       expiresAt: new Date(Date.now() + 86400000)
     });
 
     const testReorder = await ReorderSuggestion.create({
       productId: reorderProduct._id,
       currentStock: 10,
+      stockAtGeneration: 10,
       recommendedQuantity: 30,
       suggestedLeadTimeDays: 7,
       confidence: 0.8,
       reasoning: 'Stock replenishment',
       status: 'PENDING',
       triggerReason: 'INVENTORY_LOW',
-      productVersion: reorderProduct.__v ?? 0,
-      productUpdatedAt: reorderProduct.updatedAt,
       expiresAt: new Date(Date.now() + 86400000)
     });
 
@@ -297,6 +295,63 @@ export async function runAuthAndAuditTests() {
     }
     assert(findOneAndUpdateErr !== null && findOneAndUpdateErr.message.includes('append-only'), 'InventorySnapshot.findOneAndUpdate() throws append-only error');
 
+    let replaceOneErr = null;
+    try {
+      await InventorySnapshot.replaceOne({ _id: testSnapshot._id }, { productId: testProduct._id, stockLevel: 888, demandVelocity: 1, source: 'CREATED' });
+    } catch (err) {
+      replaceOneErr = err;
+    }
+    assert(replaceOneErr !== null && replaceOneErr.message.includes('append-only'), 'InventorySnapshot.replaceOne() throws append-only error');
+
+    let findOneAndReplaceErr = null;
+    try {
+      await InventorySnapshot.findOneAndReplace({ _id: testSnapshot._id }, { productId: testProduct._id, stockLevel: 888, demandVelocity: 1, source: 'CREATED' });
+    } catch (err) {
+      findOneAndReplaceErr = err;
+    }
+    assert(findOneAndReplaceErr !== null && findOneAndReplaceErr.message.includes('append-only'), 'InventorySnapshot.findOneAndReplace() throws append-only error');
+
+    let findOneAndDeleteErr = null;
+    try {
+      await InventorySnapshot.findOneAndDelete({ _id: testSnapshot._id });
+    } catch (err) {
+      findOneAndDeleteErr = err;
+    }
+    assert(findOneAndDeleteErr !== null && findOneAndDeleteErr.message.includes('append-only'), 'InventorySnapshot.findOneAndDelete() throws append-only error');
+
+    let bulkWriteUpdateErr = null;
+    try {
+      await InventorySnapshot.bulkWrite([
+        { updateOne: { filter: { _id: testSnapshot._id }, update: { $set: { stockLevel: 999 } } } }
+      ]);
+    } catch (err) {
+      bulkWriteUpdateErr = err;
+    }
+    assert(bulkWriteUpdateErr !== null && bulkWriteUpdateErr.message.includes('append-only'), 'InventorySnapshot.bulkWrite() with updateOne throws append-only error');
+
+    let bulkWriteDeleteErr = null;
+    try {
+      await InventorySnapshot.bulkWrite([
+        { deleteOne: { filter: { _id: testSnapshot._id } } }
+      ]);
+    } catch (err) {
+      bulkWriteDeleteErr = err;
+    }
+    assert(bulkWriteDeleteErr !== null && bulkWriteDeleteErr.message.includes('append-only'), 'InventorySnapshot.bulkWrite() with deleteOne throws append-only error');
+
+    // bulkWrite with insertOne is allowed
+    const bulkInsertRes = await InventorySnapshot.bulkWrite([
+      { insertOne: { document: { productId: testProduct._id, stockLevel: 70, demandVelocity: 3, source: 'CREATED' } } }
+    ]);
+    assert(bulkInsertRes.insertedCount === 1, 'InventorySnapshot.bulkWrite() allows insertOne append operation');
+
+    // insertMany is allowed as append operation
+    const insertManyRes = await InventorySnapshot.insertMany([
+      { productId: testProduct._id, stockLevel: 71, demandVelocity: 3, source: 'CREATED' },
+      { productId: testProduct._id, stockLevel: 72, demandVelocity: 4, source: 'CREATED' }
+    ]);
+    assert(insertManyRes.length === 2, 'InventorySnapshot.insertMany() allows appending multiple documents');
+
     let docSaveErr = null;
     try {
       testSnapshot.stockLevel = 777;
@@ -356,6 +411,63 @@ export async function runAuthAndAuditTests() {
       logFindOneAndUpdateErr = err;
     }
     assert(logFindOneAndUpdateErr !== null && logFindOneAndUpdateErr.message.includes('append-only'), 'AdvisorLog.findOneAndUpdate() throws append-only error');
+
+    let logReplaceOneErr = null;
+    try {
+      await AdvisorLog.replaceOne({ _id: testLog._id }, { logType: 'TRIGGER_FIRED', outcome: 'tampered' });
+    } catch (err) {
+      logReplaceOneErr = err;
+    }
+    assert(logReplaceOneErr !== null && logReplaceOneErr.message.includes('append-only'), 'AdvisorLog.replaceOne() throws append-only error');
+
+    let logFindOneAndReplaceErr = null;
+    try {
+      await AdvisorLog.findOneAndReplace({ _id: testLog._id }, { logType: 'TRIGGER_FIRED', outcome: 'tampered' });
+    } catch (err) {
+      logFindOneAndReplaceErr = err;
+    }
+    assert(logFindOneAndReplaceErr !== null && logFindOneAndReplaceErr.message.includes('append-only'), 'AdvisorLog.findOneAndReplace() throws append-only error');
+
+    let logFindOneAndDeleteErr = null;
+    try {
+      await AdvisorLog.findOneAndDelete({ _id: testLog._id });
+    } catch (err) {
+      logFindOneAndDeleteErr = err;
+    }
+    assert(logFindOneAndDeleteErr !== null && logFindOneAndDeleteErr.message.includes('append-only'), 'AdvisorLog.findOneAndDelete() throws append-only error');
+
+    let logBulkWriteUpdateErr = null;
+    try {
+      await AdvisorLog.bulkWrite([
+        { updateOne: { filter: { _id: testLog._id }, update: { $set: { outcome: 'tampered' } } } }
+      ]);
+    } catch (err) {
+      logBulkWriteUpdateErr = err;
+    }
+    assert(logBulkWriteUpdateErr !== null && logBulkWriteUpdateErr.message.includes('append-only'), 'AdvisorLog.bulkWrite() with updateOne throws append-only error');
+
+    let logBulkWriteDeleteErr = null;
+    try {
+      await AdvisorLog.bulkWrite([
+        { deleteOne: { filter: { _id: testLog._id } } }
+      ]);
+    } catch (err) {
+      logBulkWriteDeleteErr = err;
+    }
+    assert(logBulkWriteDeleteErr !== null && logBulkWriteDeleteErr.message.includes('append-only'), 'AdvisorLog.bulkWrite() with deleteOne throws append-only error');
+
+    // bulkWrite with insertOne is allowed
+    const logBulkInsertRes = await AdvisorLog.bulkWrite([
+      { insertOne: { document: { logType: 'TRIGGER_FIRED', triggerType: 'MANUAL', advisor: 'ai' } } }
+    ]);
+    assert(logBulkInsertRes.insertedCount === 1, 'AdvisorLog.bulkWrite() allows insertOne append operation');
+
+    // insertMany is allowed as append operation
+    const logInsertManyRes = await AdvisorLog.insertMany([
+      { logType: 'TRIGGER_FIRED', triggerType: 'INVENTORY_LOW', advisor: 'rule-based' },
+      { logType: 'TRIGGER_FIRED', triggerType: 'DEMAND_SPIKE', advisor: 'rule-based' }
+    ]);
+    assert(logInsertManyRes.length === 2, 'AdvisorLog.insertMany() allows appending multiple documents');
 
     let logDocSaveErr = null;
     try {

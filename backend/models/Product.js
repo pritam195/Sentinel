@@ -11,11 +11,22 @@ const productSchema = new mongoose.Schema({
   status: { type: String, enum: ['ACTIVE', 'PRICE_REVIEW_PENDING', 'OUT_OF_STOCK'], default: 'ACTIVE' },
   costPrice: { type: Number, required: false, min: 0 },
   minMarginPercent: { type: Number, required: false, min: 0, default: 0 },
+  priceVersion: { type: Number, required: true, default: 1, min: 1 },
   priceHistory: [{ 
     price: Number, 
     date: { type: Date, default: Date.now },
     changedBy: { type: String, required: false, default: null }
   }]
 }, { timestamps: true });
+
+productSchema.pre('save', function () {
+  if (!this.isNew) {
+    if (this.isModified('currentPrice') || this.isModified('costPrice')) {
+      if (!this.isModified('priceVersion')) {
+        this.priceVersion = (this.priceVersion || 1) + 1;
+      }
+    }
+  }
+});
 
 export default mongoose.model('Product', productSchema);

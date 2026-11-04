@@ -11,6 +11,7 @@ const pricingSuggestionSchema = new mongoose.Schema({
   triggerReason: { type: String, enum: ['INITIAL', 'INVENTORY_LOW', 'DEMAND_SPIKE', 'MANUAL'], required: true },
   isFallback: { type: Boolean, default: false },
   fallbackReason: { type: String, default: null },
+  priceVersion: { type: Number, required: true, default: 1 },
   productVersion: { type: Number, default: 0 },
   productUpdatedAt: { type: Date, required: false },
   expiresAt: { type: Date, required: true, index: true },

@@ -32,7 +32,8 @@ router.patch('/strategy', authenticateJWT, requireRole(ROLES.ADMIN), async (req,
       demandSpikeMultiplier,
       maxSingleChangePercent,
       maxChangesPer24h,
-      suggestionTtlHours
+      suggestionTtlHours,
+      reorderStalenessThresholdPercent
     } = req.body;
 
     if (strategy !== undefined && !['rule-based', 'ai'].includes(strategy)) {
@@ -54,6 +55,10 @@ router.patch('/strategy', authenticateJWT, requireRole(ROLES.ADMIN), async (req,
       (!Number.isFinite(suggestionTtlHours) || suggestionTtlHours < 0.001)) {
       return res.status(400).json({ error: 'suggestionTtlHours must be a positive number' });
     }
+    if (reorderStalenessThresholdPercent !== undefined &&
+      (!Number.isFinite(reorderStalenessThresholdPercent) || reorderStalenessThresholdPercent < 1 || reorderStalenessThresholdPercent > 100)) {
+      return res.status(400).json({ error: 'reorderStalenessThresholdPercent must be between 1 and 100' });
+    }
 
     let config = await Config.findOne();
     if (!config) {
@@ -62,7 +67,8 @@ router.patch('/strategy', authenticateJWT, requireRole(ROLES.ADMIN), async (req,
         demandSpikeMultiplier,
         maxSingleChangePercent,
         maxChangesPer24h,
-        suggestionTtlHours
+        suggestionTtlHours,
+        reorderStalenessThresholdPercent
       });
     } else {
       if (strategy !== undefined) config.activeStrategy = strategy;
@@ -70,6 +76,7 @@ router.patch('/strategy', authenticateJWT, requireRole(ROLES.ADMIN), async (req,
       if (maxSingleChangePercent !== undefined) config.maxSingleChangePercent = maxSingleChangePercent;
       if (maxChangesPer24h !== undefined) config.maxChangesPer24h = maxChangesPer24h;
       if (suggestionTtlHours !== undefined) config.suggestionTtlHours = suggestionTtlHours;
+      if (reorderStalenessThresholdPercent !== undefined) config.reorderStalenessThresholdPercent = reorderStalenessThresholdPercent;
     }
     
     await config.save();

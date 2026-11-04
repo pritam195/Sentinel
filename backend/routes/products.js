@@ -9,8 +9,6 @@ import { recordTrigger } from '../services/metrics.js';
 
 const router = express.Router();
 
-// Remove stub
-
 // GET /products?status=&category=
 router.get('/', async (req, res) => {
   try {
@@ -30,7 +28,6 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const product = new Product(req.body);
-    // set initial status correctly if stock is 0
     if (product.stockLevel === 0) product.status = 'OUT_OF_STOCK';
     await product.save();
     await recordInventorySnapshot(product, 'CREATED');
@@ -61,15 +58,12 @@ router.patch('/:id/stock', async (req, res) => {
     if (product.stockLevel === 0) {
       product.status = 'OUT_OF_STOCK';
     } else if (product.stockLevel > 0 && product.status === 'OUT_OF_STOCK') {
-      // Back to active if recovering and no suggestions pending
-      // (Simplified logic for now)
       product.status = 'ACTIVE';
     }
 
     await product.save();
     await recordInventorySnapshot(product, 'STOCK_UPDATED');
 
-    // The listener performs its work asynchronously; never await it in this request.
     inventoryEvents.emit('inventory:changed', product);
 
     res.json(product);
@@ -108,6 +102,42 @@ router.post('/:id/orders', async (req, res) => {
   }
 });
 
+// PATCH /products/:id/price
+// Updates price or costPrice and increments priceVersion
+router.patch('/:id/price', async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+
+    const { currentPrice, costPrice } = req.body;
+    let modified = false;
+
+    if (typeof currentPrice === 'number' && Number.isFinite(currentPrice) && currentPrice > 0) {
+      product.currentPrice = currentPrice;
+      product.priceHistory.push({
+        price: currentPrice,
+        changedBy: req.user?.userId || 'direct_patch'
+      });
+      modified = true;
+    }
+
+    if (typeof costPrice === 'number' && Number.isFinite(costPrice) && costPrice >= 0) {
+      product.costPrice = costPrice;
+      modified = true;
+    }
+
+    if (!modified) {
+      return res.status(400).json({ error: 'Provide valid currentPrice or costPrice' });
+    }
+
+    product.priceVersion = (product.priceVersion || 1) + 1;
+    await product.save();
+    res.json(product);
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 // POST /products/:id/suggest-pricing
 router.post('/:id/suggest-pricing', async (req, res) => {
   try {
@@ -136,7 +166,9 @@ router.post('/:id/suggest-pricing', async (req, res) => {
       confidence: suggestion.confidence,
       reasoning: suggestion.reasoning,
       status: 'PENDING',
-      triggerReason: 'MANUAL'
+      triggerReason: 'MANUAL',
+      priceVersion: product.priceVersion || 1,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
     });
     
     await pricingSuggestion.save();
@@ -196,7 +228,9 @@ router.post('/:id/suggest-pricing/stream', async (req, res) => {
       confidence: suggestion.confidence,
       reasoning: suggestion.reasoning,
       status: 'PENDING',
-      triggerReason: 'MANUAL'
+      triggerReason: 'MANUAL',
+      priceVersion: product.priceVersion || 1,
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
     });
     
     await pricingSuggestion.save();
@@ -215,25 +249,27 @@ router.post('/:id/suggest-reorder', async (req, res) => {
     const product = await Product.findById(req.params.id);
     if (!product) return res.status(404).json({ error: 'Product not found' });
 
-    const strategy = await getActiveStrategy();
+    const strategy = new AIAdvisor();
     await recordTrigger({
       productId: product._id,
       sku: product.sku,
       category: product.category,
       triggerType: 'MANUAL',
-      advisor: strategy instanceof AIAdvisor ? 'ai' : 'rule-based'
+      advisor: 'ai'
     });
     const suggestion = await strategy.suggestReorder(product, 'MANUAL');
 
     const reorderSuggestion = new ReorderSuggestion({
       productId: product._id,
       currentStock: product.stockLevel,
+      stockAtGeneration: product.stockLevel,
       recommendedQuantity: suggestion.recommendedQuantity,
       suggestedLeadTimeDays: suggestion.suggestedLeadTimeDays,
       confidence: suggestion.confidence,
       reasoning: suggestion.reasoning,
       status: 'PENDING',
-      triggerReason: 'MANUAL'
+      triggerReason: 'MANUAL',
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000)
     });
 
     await reorderSuggestion.save();

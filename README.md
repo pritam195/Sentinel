@@ -140,7 +140,7 @@ Rule-based decisions evaluate in sub-millisecond time, whereas live LLM calls re
 
 1. **In-Process EventEmitter (No Distributed Message Broker)**: Event dispatching relies on Node.js's in-process `EventEmitter`. Events currently queued in memory are lost if the Node process experiences a sudden crash before execution (though persisted state is protected by database idempotency indexes). A production multi-instance deployment should replace the in-process emitter with a distributed message broker (e.g., Redis Streams, RabbitMQ, or Apache Kafka).
 2. **Single-Region Scope**: Database indexes and optimistic concurrency locks guarantee correctness across multi-process workers on a shared MongoDB database, but multi-region active-active deployments with cross-datacenter replication lag are not currently addressed.
-3. **Application-Level vs Database-Enforced Append-Only**: The append-only behavior of `InventorySnapshot` and `AdvisorLog` is enforced in application code via Mongoose middleware hooks. MongoDB administrative sessions, raw database drivers, or shell scripts with direct write access bypass these hooks. Database-level enforcement requires configuring custom MongoDB roles (e.g. `readWrite` without `update` or `delete` privileges) on the production database user.
+3. **Application-Level vs Database-Enforced Append-Only**: The append-only behavior of `InventorySnapshot` and `AdvisorLog` is enforced in application code via Mongoose model and document middleware hooks (`updateOne`, `updateMany`, `replaceOne`, `findOneAndUpdate`, `findOneAndReplace`, `findOneAndDelete`, `deleteOne`, `deleteMany`, `bulkWrite`, and `save` on existing documents). Direct calls via `Model.collection.*`, raw MongoDB drivers, or administrative shell sessions bypass these application-level hooks. True database-level immutability requires configuring custom MongoDB roles (e.g., `readWrite` without `update` or `delete` privileges) on the production database user.
 4. **Benchmark Label Provenance**: Benchmark labels are defined by the objective retail merchandising rubric in `docs/benchmark-labeling.md`. Until formal human review is complete, labels represent rubric-grounded candidate ground truth rather than verified expert human labels.
 
 ---
@@ -151,10 +151,12 @@ All write endpoints require a valid JWT bearer token (`Authorization: Bearer <to
 
 | Method | Endpoint | Required Role | Description |
 |---|---|---|---|
-| `POST` | `/auth/token` | Public | Mint test token (`{ userId, role, name }`) |
+| `POST` | `/auth/login` | Public | Authenticate seeded user (`{ username, password }`) -> returns JWT & server role |
+| `POST` | `/auth/dev-token` | Public (dev only) | Mint development token when `ALLOW_DEV_TOKENS=true` |
 | `GET` | `/auth/me` | Authenticated | Inspect current authenticated user and role |
 | `GET` | `/products` | Public / Viewer | List catalog items (`?status=&category=`) |
 | `PATCH` | `/products/:id/stock` | Merchandiser, Admin | Adjust inventory (`{ stockLevel }` or `{ delta }`) |
+| `PATCH` | `/products/:id/price` | Merchandiser, Admin | Adjust price / costPrice (`{ currentPrice, costPrice }`) & bump `priceVersion` |
 | `POST` | `/products/:id/orders` | Public / Viewer | Simulate a purchase |
 | `POST` | `/products/:id/suggest-pricing` | Merchandiser, Admin | Trigger pricing advice on demand |
 | `POST` | `/products/:id/suggest-pricing/stream` | Merchandiser, Admin | Stream live Gemini reasoning via SSE |

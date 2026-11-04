@@ -2,6 +2,7 @@ import express from 'express';
 import PricingSuggestion from '../models/PricingSuggestion.js';
 import ReorderSuggestion from '../models/ReorderSuggestion.js';
 import Product from '../models/Product.js';
+import Config from '../models/Config.js';
 import { recordInventorySnapshot } from '../services/inventorySnapshots.js';
 import { expirePendingSuggestions } from '../services/recommendationLoop.js';
 import { authenticateJWT, requireRole, ROLES } from '../middleware/auth.js';
@@ -67,19 +68,17 @@ router.patch('/pricing-suggestions/:id', authenticateJWT, requireRole(ROLES.MERC
       const product = await Product.findById(suggestion.productId);
       if (!product) return res.status(404).json({ error: 'Product not found' });
 
-      // Optimistic Concurrency Check: Verify product price or version hasn't changed since generation
-      const versionChanged = suggestion.productVersion !== undefined && product.__v !== suggestion.productVersion;
-      const priceChanged = product.currentPrice !== suggestion.currentPrice;
-      const dateChanged = suggestion.productUpdatedAt && product.updatedAt && new Date(product.updatedAt).getTime() > new Date(suggestion.productUpdatedAt).getTime();
+      // Optimistic Concurrency Check: Verify product priceVersion hasn't changed since generation
+      const versionChanged = suggestion.priceVersion !== undefined && product.priceVersion !== suggestion.priceVersion;
 
-      if (versionChanged || priceChanged || dateChanged) {
+      if (versionChanged) {
         suggestion.status = 'STALE';
         suggestion.actedBy = actingUserId;
         await suggestion.save();
         await restoreProductStatusWhenResolved(product);
         await product.save();
         return res.status(409).json({
-          error: 'Conflict: Product has changed since suggestion was generated. Marked as STALE.',
+          error: 'Conflict: Product price has changed since suggestion was generated. Marked as STALE.',
           suggestion
         });
       }
@@ -89,6 +88,7 @@ router.patch('/pricing-suggestions/:id', authenticateJWT, requireRole(ROLES.MERC
       await suggestion.save();
 
       product.currentPrice = suggestion.recommendedPrice;
+      product.priceVersion = (product.priceVersion || 1) + 1;
       product.priceHistory.push({ price: suggestion.recommendedPrice, changedBy: actingUserId });
       await restoreProductStatusWhenResolved(product);
       await product.save();
@@ -157,19 +157,30 @@ router.patch('/reorder-suggestions/:id', authenticateJWT, requireRole(ROLES.MERC
       const product = await Product.findById(suggestion.productId);
       if (!product) return res.status(404).json({ error: 'Product not found' });
 
-      // Optimistic Concurrency Check: Verify product stock or version hasn't changed since generation
-      const versionChanged = suggestion.productVersion !== undefined && product.__v !== suggestion.productVersion;
-      const stockChanged = product.stockLevel !== suggestion.currentStock;
-      const dateChanged = suggestion.productUpdatedAt && product.updatedAt && new Date(product.updatedAt).getTime() > new Date(suggestion.productUpdatedAt).getTime();
+      // Optimistic Concurrency Check: Verify current stock has not drifted beyond configurable threshold
+      const config = await Config.findOne();
+      const thresholdPct = config?.reorderStalenessThresholdPercent ?? 25;
+      const thresholdRatio = thresholdPct / 100;
+      const baseStock = suggestion.stockAtGeneration !== undefined
+        ? suggestion.stockAtGeneration
+        : (suggestion.currentStock ?? 0);
 
-      if (versionChanged || stockChanged || dateChanged) {
+      let drifted = false;
+      if (baseStock === 0) {
+        drifted = product.stockLevel > 0;
+      } else {
+        const drift = Math.abs(product.stockLevel - baseStock) / baseStock;
+        drifted = drift > thresholdRatio;
+      }
+
+      if (drifted) {
         suggestion.status = 'STALE';
         suggestion.actedBy = actingUserId;
         await suggestion.save();
         await restoreProductStatusWhenResolved(product);
         await product.save();
         return res.status(409).json({
-          error: 'Conflict: Product stock state has changed since suggestion was generated. Marked as STALE.',
+          error: `Conflict: Product stock state has drifted beyond allowed ${thresholdPct}% threshold since suggestion was generated. Marked as STALE.`,
           suggestion
         });
       }
