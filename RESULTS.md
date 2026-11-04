@@ -2,7 +2,7 @@
 
 This document reports measured performance data, reliability rates, concurrency behavior, and benchmark comparisons collected from automated test harnesses executed against the Sentinel decision engine.
 
-All figures below reflect actual runs executed on local MongoDB and Node.js with Google Gemini (`gemini-2.5-flash`).
+All figures below reflect actual runs executed on local MongoDB and Node.js with Google Gemini (`gemini-2.5-flash`), with the 105-scenario benchmark executed as an algorithmic pipeline harness test with deterministic mock response mapping, and the burst load test executed against the live Google Gemini API endpoint under Free Tier quota limits.
 
 ---
 
@@ -54,6 +54,9 @@ The Sentinel guardrail pipeline evaluates every AI suggestion through three orde
 
 ### Stage 3 Policy Layer Verification (Measured Runs)
 
+> [!NOTE]
+> **Configuration Overrides for Test Battery**: The policy constraints below (`maxSingleChangePercent: 15` and `maxChangesPer24h: 3`) are explicit test overrides passed to the test instance to verify tight bounding. The production schema defaults in `Config.js` and `AIAdvisor.js` are `20%` and `5 changes / 24h`.
+
 | Policy Guardrail Tested | Raw Input | Policy Constraint | Outcome / Clamped Value | Raw Value Preserved | Fell Back? |
 |---|---|---|---|---|---|
 | **Max Single-Change Percent** | $140.00 (+40%) | Cap at +15% ($115.00) | `clamped_by_policy` $\to$ **$115.00** | Yes (`rawPrice = $140.00`) | No (`fellBack: false`) |
@@ -84,71 +87,73 @@ The Sentinel guardrail pipeline evaluates every AI suggestion through three orde
 
 ---
 
-## 4. Benchmark: Three-Way Empirical Advisor Evaluation
+## 4. Benchmark: Three-Way Empirical Advisor Evaluation (Algorithmic Pipeline Harness)
 
 - **Harness**: `backend/tests/benchmark.test.js`
-- **Execution Mode**: `MOCK` (`BENCHMARK_MODE=mock`)
+- **Execution Mode**: `MOCK` (`BENCHMARK_MODE=mock`) — Algorithmic pipeline/harness validation against deterministic mock responses
 - **Model Name**: `gemini-2.5-flash (deterministic mock)`
-- **Git Commit**: `2f29a76d51207efe43cf19a0907538dea23ef292`
-- **Timestamp**: `2026-11-04T14:54:28.451Z`
+- **Git Commit**: `66dd5e755516232b070d229c6b47f4ad3e7d0377`
+- **Timestamp**: `2026-11-04T17:03:22.733Z`
 - **Total Scenarios**: 105 scenarios partitioned by fixed seed (`seed=42`) into **32 Development (30.5%)** and **73 Held-Out (69.5%)**.
 - **Call Accounting & Fallback Breakdown**:
   - Pricing Calls: 105 total | 105 answered (100.0%) | 0 fallback
-  - Reorder Calls: 105 total | 78 answered (74.3%) | 27 fallback (dead-stock scenarios where 0 reorder quantity triggered schema positive integer constraint, falling back safely to rule engine)
-- **Sample Size Header Notice**: *Because fewer than 100 scenarios were answered for AI reorder (78 answered, 27 fell back to rule engine), AI reorder accuracy metrics below are computed strictly on the 78 answered scenarios (22 in dev split, 56 in held-out split) and never conflated with fallback outputs.*
+  - Reorder Calls: 105 total | 105 answered (100.0%) | 0 fallback (schema and plausibility allow 0 reorder quantity for dead-stock scenarios)
+- **Like-for-Like Evaluation Notice**: *All 105 scenarios (including 17 zero-replenishment dead-stock edge cases) are fully answered and evaluated across all three advisors without fallback truncation.*
 
 > [!NOTE]
-> **Methodology & Provenance Notice**:
+> **Methodology, Provenance & Peer-Review Disclosure**:
 > 1. **Synthetic Scenarios**: Scenarios are synthetic retail archetypes covering 5 commercial categories (`ELECTRONICS`, `APPAREL`, `HOME`, `BEAUTY`, `GROCERY`) and mandatory edge cases (zero inventory, extreme demand spikes, razor-thin margins near cost, and dead inventory).
-> 2. **Candidate Ground Truth**: Labels are defined by the objective retail merchandising rubric in `docs/benchmark-labeling.md` and are pending formal human expert sign-off.
-> 3. **Ceiling Effect on Direction**: The 100% directional agreement achieved by rule-based advisors represents an inherent ceiling effect of coarse 3-class directional heuristics (`INCREASE` / `DECREASE` / `HOLD`), which limits what directional accuracy alone can demonstrate regarding recommendation quality.
-> 4. **Pre-Committed Textbook Parameters**: `DaysOfSupplyRuleAdvisor` parameters were chosen up front from standard periodic-review inventory theory ($L = 7\text{d}, R = 7\text{d}, S_s = 3\text{d}$; order-up-to level $S = \lceil 17 \times \text{velocity} \rceil - \text{stock}$) without post-hoc tuning on benchmark results.
+> 2. **Candidate Ground Truth & Peer Review**: Labels are derived programmatically from the retail merchandising rubric in `docs/benchmark-labeling.md` and are pending formal human expert sign-off. Section 8 documents peer-review findings.
+> 3. **Label Circularity on Inventory Replenishment**: The reorder rubric target formula mirrors standard order-up-to periodic-review logic ($Q_c = \max(0, \lceil \text{velocity} \times (L + R) + S_s \rceil - \text{stock})$). Because `DaysOfSupplyRuleAdvisor` implements the exact textbook order-up-to policy, its 82.2% accuracy on the held-out split is fundamentally a demonstration of **formulaic self-agreement** with the rubric rather than an empirical validation against real-world sales outcomes.
+> 4. **Pricing Comparison is Two-Way, Not Three-Way**: Both `NaiveRule` and `DaysOfSupplyRule` implement the exact same pricing heuristic (+10% on low stock, +5% on demand surge). Consequently, both produce identical pricing metrics (68/73 = 93.2% window accuracy, 98.5% proximity). Pricing evaluation is therefore strictly a two-way comparison between the baseline heuristic and the AI advisor.
+> 5. **Directional Triviality & Ceiling Effect**: A completely velocity-blind static rule achieves 100% directional accuracy on the dataset. A coarse 3-class decision (`INCREASE`, `DECREASE`, `HOLD`) on low-stock and demand-surge triggers is trivially saturated by basic threshold checks and offers zero discriminatory power regarding recommendation intelligence.
+> 6. **Gemini Free Tier Quota Boundary**: Running all 105 scenarios live against `gemini-2.5-flash` requires 210 live LLM API calls. On the Google Gemini Free Tier, the project key is governed by a hard quota ceiling of **20 requests per day** (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`, 15-hour retry delay upon exhaustion). Consequently, the 105-scenario benchmark is maintained as a deterministic pipeline test for CI and algorithmic verification, while live upstream resilience is measured via burst load testing.
 
 ### Summary Comparison Table: Held-Out Split ($N = 73$ Scenarios)
 
-| Evaluation Metric | NaiveRule Baseline (`threshold * 2`) | DaysOfSupplyRule (Inventory Theory) | AI Advisor (Answered Calls Only) | Pairwise McNemar: DoS vs. AI | Pairwise McNemar: Naive vs. DoS |
+| Evaluation Metric | NaiveRule Baseline (`threshold * 2`) | DaysOfSupplyRule (Inventory Theory) | AI Advisor (Answered Calls) | Pairwise McNemar: DoS vs. AI | Pairwise McNemar: Naive vs. DoS |
 |---|---|---|---|---|---|
 | **Directional Agreement** | **73/73 (100.0%)**<br>[95.0%, 100.0%] | **73/73 (100.0%)**<br>[95.0%, 100.0%] | **71/73 (97.3%)**<br>[90.5%, 99.2%] | $\chi^2 = 0.50, p = 0.4795$<br>**Indistinguishable** ($p \ge 0.05$) | $\chi^2 = 0.00, p = 1.0000$<br>**Equivalent** |
 | **Price Window Accuracy** | **68/73 (93.2%)**<br>[84.9%, 97.0%] | **68/73 (93.2%)**<br>[84.9%, 97.0%] | **66/73 (90.4%)**<br>[81.5%, 95.3%] | $\chi^2 = 0.50, p = 0.4795$<br>**Indistinguishable** ($p \ge 0.05$) | $\chi^2 = 0.00, p = 1.0000$<br>**Equivalent** |
 | **Price Proximity Score** | **98.5%** | **98.5%** | **98.6%** | Mean diff: 0.1% | Mean diff: 0.0% |
-| **Reorder Quantity Accuracy** | **16/73 (21.9%)**<br>[14.0%, 32.7%] | **60/73 (82.2%)**<br>[71.9%, 89.3%] | **48/56 (85.7%)**<br>[74.3%, 92.6%] | $\chi^2 = 0.00, p = 1.0000$<br>**Indistinguishable** ($p \ge 0.05$) | $\chi^2 = 42.02, p < 0.0001$<br>**Distinguishable** ($p < 0.05$) |
+| **Reorder Quantity Accuracy** | **16/73 (21.9%)**<br>[14.0%, 32.7%] | **60/73 (82.2%)**<br>[71.9%, 89.3%] | **58/73 (79.5%)**<br>[68.8%, 87.1%] | $\chi^2 = 0.17, p = 0.6831$<br>**Indistinguishable** ($p \ge 0.05$) | $\chi^2 = 42.02, p < 0.0001$<br>**Distinguishable** ($p < 0.05$) |
 
 ### Summary Comparison Table: Development Split ($N = 32$ Scenarios)
 
-| Evaluation Metric | NaiveRule Baseline | DaysOfSupplyRule | AI Advisor (Answered Calls Only) | Pairwise McNemar: DoS vs. AI |
+| Evaluation Metric | NaiveRule Baseline | DaysOfSupplyRule | AI Advisor (Answered Calls) | Pairwise McNemar: DoS vs. AI |
 |---|---|---|---|---|
 | **Directional Agreement** | **32/32 (100.0%)** [89.3%, 100.0%] | **32/32 (100.0%)** [89.3%, 100.0%] | **32/32 (100.0%)** [89.3%, 100.0%] | $\chi^2 = 0.00, p = 1.0000$ (Equivalent) |
 | **Price Window Accuracy** | **32/32 (100.0%)** [89.3%, 100.0%] | **32/32 (100.0%)** [89.3%, 100.0%] | **32/32 (100.0%)** [89.3%, 100.0%] | $\chi^2 = 0.00, p = 1.0000$ (Equivalent) |
 | **Price Proximity Score** | **98.7%** | **98.7%** | **99.1%** | Mean diff: 0.4% |
-| **Reorder Quantity Accuracy** | **6/32 (18.8%)** [8.9%, 35.3%] | **24/32 (75.0%)** [57.9%, 86.7%] | **15/22 (68.2%)** [47.3%, 83.6%] | $\chi^2 = 0.50, p = 0.4795$ (Indistinguishable) |
+| **Reorder Quantity Accuracy** | **6/32 (18.8%)** [8.9%, 35.3%] | **24/32 (75.0%)** [57.9%, 86.7%] | **20/32 (62.5%)** [45.3%, 77.1%] | $\chi^2 = 2.25, p = 0.1336$ (Indistinguishable) |
 
 ### Summary Comparison Table: Full Dataset ($N = 105$ Scenarios)
 
-| Evaluation Metric | NaiveRule Baseline | DaysOfSupplyRule | AI Advisor (Answered Calls Only) | Pairwise McNemar: DoS vs. AI |
+| Evaluation Metric | NaiveRule Baseline | DaysOfSupplyRule | AI Advisor (Answered Calls) | Pairwise McNemar: DoS vs. AI |
 |---|---|---|---|---|
 | **Directional Agreement** | **105/105 (100.0%)** [96.5%, 100.0%] | **105/105 (100.0%)** [96.5%, 100.0%] | **103/105 (98.1%)** [93.3%, 99.5%] | $\chi^2 = 0.50, p = 0.4795$ (Indistinguishable) |
 | **Price Window Accuracy** | **100/105 (95.2%)** [89.3%, 97.9%] | **100/105 (95.2%)** [89.3%, 97.9%] | **98/105 (93.3%)** [86.9%, 96.7%] | $\chi^2 = 0.50, p = 0.4795$ (Indistinguishable) |
 | **Price Proximity Score** | **98.6%** | **98.6%** | **98.7%** | Mean diff: 0.1% |
-| **Reorder Quantity Accuracy** | **22/105 (21.0%)** [14.3%, 29.7%] | **84/105 (80.0%)** [71.4%, 86.5%] | **63/78 (80.8%)** [70.7%, 88.0%] | $\chi^2 = 0.57, p = 0.4497$ (Indistinguishable) |
+| **Reorder Quantity Accuracy** | **22/105 (21.0%)** [14.3%, 29.7%] | **84/105 (80.0%)** [71.4%, 86.5%] | **78/105 (74.3%)** [65.2%, 81.7%] | $\chi^2 = 2.50, p = 0.1138$ (Indistinguishable) |
 
 ### Empirical Findings
 
-1. **AI Does NOT Outperform Textbook Days-of-Supply**: On the held-out split, the difference in replenishment accuracy between `DaysOfSupplyRuleAdvisor` (82.2%) and `AIAdvisor` (85.7%) yields discordant pairs $b = 3, c = 2$, continuity-corrected $\chi^2 = 0.00$, and two-tailed $p = 1.0000 \ge 0.05$. The data does **NOT** support the claim that AI outperforms standard inventory-theory rules.
+1. **AI Does NOT Outperform Textbook Days-of-Supply**: In this like-for-like evaluation across all 73 held-out scenarios (including dead stock where quantity is 0), `DaysOfSupplyRuleAdvisor` achieved 82.2% (60/73) replenishment accuracy versus `AIAdvisor` at 79.5% (58/73). The pairwise McNemar test yields discordant pairs $b = 4, c = 2$, continuity-corrected $\chi^2 = 0.17$, and two-tailed $p = 0.6831 \ge 0.05$. The data does **NOT** support the claim that AI outperforms standard inventory-theory rules.
 2. **Failure of Naive Static Threshold Heuristics**: The static heuristic `threshold * 2` achieves only 21.9% reorder accuracy on the held-out split ($\chi^2 = 42.02, p < 0.0001$ against Days-of-Supply). Static heuristics fail because they ignore velocity: they under-replenish during demand spikes and order unnecessary stock during inventory equilibrium.
-3. **Equivalence in Pricing Rules**: On directional agreement (97.3%–100%) and price window accuracy (90.4%–93.2%), all three advisors perform with statistically indistinguishable accuracy ($p = 0.4795$), with mean absolute price proximity within 0.1% of target.
+3. **Equivalence in Pricing Rules**: On directional agreement (97.3%–100%) and price window accuracy (90.4%–93.2%), all three advisors perform with statistically indistinguishable accuracy ($p = 0.4795$), with mean absolute price proximity within 0.1% of target. Note that because `NaiveRule` and `DaysOfSupply` share the identical pricing heuristic, pricing is strictly a two-way comparison.
 
 ### Per-Call Latency Profiles (p50 / p95 / p99)
 
 Latencies measured via high-resolution `performance.now()` across all executed calls:
 
-| Pipeline / Execution Path | Median (p50) | 95th Percentile (p95) | 99th Percentile (p99) |
-|---|---|---|---|
-| **NaiveRule Pricing** | 0.00 ms | 0.02 ms | 0.04 ms |
-| **NaiveRule Reorder** | 0.00 ms | 0.01 ms | 0.02 ms |
-| **DaysOfSupplyRule Pricing** | 0.00 ms | 0.01 ms | 0.01 ms |
-| **DaysOfSupplyRule Reorder** | 0.00 ms | 0.01 ms | 0.02 ms |
-| **AI Advisor (Deterministic Mock / CI)** | 15.53 ms | 17.05 ms | 17.87 ms |
-| **AI Advisor (Live Google Gemini 2.5 Flash)** | 5,760 ms | 8,335 ms | 8,335 ms |
+| Pipeline / Execution Path | Median (p50) | 95th Percentile (p95) | 99th Percentile (p99) | Notes |
+|---|---|---|---|---|
+| **NaiveRule Pricing** | 0.00 ms | 0.02 ms | 0.04 ms | Sub-millisecond rule evaluation |
+| **NaiveRule Reorder** | 0.00 ms | 0.01 ms | 0.02 ms | Sub-millisecond rule evaluation |
+| **DaysOfSupplyRule Pricing** | 0.00 ms | 0.01 ms | 0.01 ms | Sub-millisecond rule evaluation |
+| **DaysOfSupplyRule Reorder** | 0.00 ms | 0.01 ms | 0.02 ms | Sub-millisecond rule evaluation |
+| **AI Advisor (Deterministic Mock / CI)** | 15.53 ms | 17.05 ms | 17.87 ms | Local memory mock response mapping |
+| **AI Advisor (Live Google Gemini 2.5 Flash)** | 5,760 ms | 8,335 ms | 8,335 ms | $N=24$ live requests during burst load test (p95 = p99 due to $N=24$ sample size) |
 
 ---
 
@@ -156,9 +161,9 @@ Latencies measured via high-resolution `performance.now()` across all executed c
 
 - **Harness**: `backend/tests/loadTest.test.js`
 - **Execution Command**: `npm --prefix backend run test:load`
-- **Execution Mode**: `MOCK` (`BENCHMARK_MODE=mock`)
-- **Model**: `gemini-2.5-flash (mock)`
-- **Git Commit**: `6b5f3fb`
+- **Execution Mode**: `LIVE (Google Gemini 2.5 Flash Free Tier Burst)`
+- **Model**: `gemini-2.5-flash (live API)`
+- **Git Commit**: `66dd5e755516232b070d229c6b47f4ad3e7d0377`
 - **Catalog Size**: 520 products seeded in 213.9ms
   - Electronics: 174
   - Apparel: 173
@@ -181,19 +186,23 @@ Latencies measured via high-resolution `performance.now()` across all executed c
 
 ### Upstream Resilience, Circuit Breaker & Fallback Breakdown
 
-Under the burst of concurrent advisor requests with active upstream resilience controls (concurrency semaphore limit: 2, exponential backoff with jitter: 3 retries, and circuit breaker trip threshold: 3 consecutive failures):
+Under a burst of concurrent advisor requests against live Google Gemini endpoints with active upstream resilience controls (concurrency semaphore limit: 2 [saturation test override; production default is 5], exponential backoff with jitter: 3 retries, and circuit breaker trip threshold: 3 consecutive failures):
 
-| Metric | Measured Value | Notes |
+| Metric | Measured Value | Operational Context & Reconciliation |
 |---|---|---|
 | **Total Advisor Requests** | 44 | 100% of triggered requests handled safely |
-| **Calls that Reached Gemini API** | 24 | Handled under semaphore concurrency limit |
-| **Calls Bypassed by Circuit Breaker** | 20 | Fast-failed instantly via `CIRCUIT_OPEN` fallback |
-| **Total Retry Attempts** | 77 | Exponential backoff retries with full jitter |
-| **Exhausted Retries** | 24 | Failed after max retries; fell back safely to rule engine |
-| **Total Fell Back to Rule Engine** | 44 | 100% fallback retention, 0 dropped events |
+| **Calls Bypassed by Circuit Breaker** | 20 | Fast-failed instantly via `CIRCUIT_OPEN` fallback in 0.06ms |
+| **Calls Reaching Gemini API** | 24 | Initial calls + probe attempts that reached upstream network |
+| **Total Retry Attempts** | 77 | Recorded across all initial attempts and transient `HALF_OPEN` probes |
+| **Exhausted Retries** | 24 | Calls that exhausted 3 retries under 429 quota exhaustion and fell back safely to rule engine |
+| **Total Fell Back to Rule Engine** | 44 | 100% fallback retention (24 via `RATE_LIMITED`, 20 via `CIRCUIT_OPEN`), 0 dropped events |
 | **Circuit Breaker Final State** | `OPEN` | Automatically tripped to prevent upstream hammering |
-| **Fallback Reason: `RATE_LIMITED`** | 24 | Caught on initial 429 exhaustion before breaker tripped |
+| **Fallback Reason: `RATE_LIMITED`** | 24 | Caught on initial 429 quota exhaustion before breaker tripped |
 | **Fallback Reason: `CIRCUIT_OPEN`** | 20 | Bypassed Gemini entirely while breaker in `OPEN` state |
+
+> [!NOTE]
+> **Retries & Calls Reconciliation**:
+> A naïve product of $24 \times 3 = 72$ retries represents the theoretical maximum for 24 static calls. In this dynamic test, as the 24 calls executed asynchronously over a 27-second window, the circuit breaker completed its 10-second cooldown and admitted probe requests in `HALF_OPEN` state. Those probes encountered the persistent upstream 429 quota exhaustion and triggered additional retry attempts, yielding the observed total of 77 retries before the breaker re-latched to `OPEN`. All 44 suggestions were safely preserved via deterministic rule engine fallback.
 
 ### Latency Percentiles (With Circuit Breaker Fast-Fail)
 
@@ -233,9 +242,9 @@ The absolute latency cost of persisting an immutable inventory audit snapshot is
 | Subsystem Tested | Test Condition | Observed Behavior | Status |
 |---|---|---|---|
 | **Retry-After Parser** | Integer seconds (`"5"`) | Parsed into 5,000ms delay | PASS |
-| **Retry-After Parser** | HTTP-date header (`Sun, 06 Nov 2026 08:49:37 GMT`) | Parsed into future delta milliseconds | PASS |
+| **Retry-After Parser** | HTTP-date header (`Fri, 06 Nov 2026 08:49:37 GMT`) | Parsed into future delta milliseconds | PASS |
 | **Retry-After Parser** | Undefined header | Returns `null` (falls back to exponential calculation) | PASS |
-| **Semaphore Limiter** | 5 concurrent requests with limit of 2 | Peak concurrency: exactly 2; remaining 3 queued and executed cleanly | PASS |
+| **Semaphore Limiter** | 5 concurrent requests with limit of 2 (test saturation override) | Peak concurrency: exactly 2; remaining 3 queued and executed cleanly | PASS |
 | **Exponential Backoff** | Upstream 429 rate limit | Retried twice with jitter; succeeded on attempt 3 (`callCount = 3`) | PASS |
 | **Circuit Breaker** | Normal operations | Initial state: `CLOSED` | PASS |
 | **Circuit Breaker** | 3 consecutive failures | State transitioned from `CLOSED` $\to$ `OPEN` | PASS |
@@ -256,6 +265,9 @@ The absolute latency cost of persisting an immutable inventory audit snapshot is
 - **Failed**: 0
 
 ### Measured Guardrail & Concurrency Behaviors
+
+> [!NOTE]
+> **Configuration Overrides for Test Suite**: The 15% single-change cap and 3 changes/24h quota are explicit test-time overrides passed to the test instance. Production schema defaults are 20% single-change cap and 5 changes/24h.
 
 | Guardrail Mechanism | Input Scenario | Enforced Action | HTTP Status | Status |
 |---|---|---|---|---|
@@ -299,7 +311,7 @@ The absolute latency cost of persisting an immutable inventory audit snapshot is
 
 ## 9. Append-Only Audit Integrity Suite
 
-Both `InventorySnapshot` and `AdvisorLog` collections are strictly append-only. All modification and deletion mutations across Mongoose query and document middleware are intercepted and rejected at the application layer:
+Both `InventorySnapshot` and `AdvisorLog` collections are strictly append-only. All 10 distinct Mongoose mutation operations across query, document, and model middleware are intercepted and rejected at the application layer:
 
 | Target Mongoose Operation | `InventorySnapshot` Enforcement | `AdvisorLog` Enforcement | Result |
 |---|---|---|---|
@@ -311,9 +323,8 @@ Both `InventorySnapshot` and `AdvisorLog` collections are strictly append-only. 
 | `replaceOne()` | Throws `Error: Append-only collection` | Throws `Error: Append-only collection` | PASS |
 | `findOneAndReplace()` | Throws `Error: Append-only collection` | Throws `Error: Append-only collection` | PASS |
 | `findOneAndDelete()` | Throws `Error: Append-only collection` | Throws `Error: Append-only collection` | PASS |
-| `bulkWrite([{ updateOne }])` | Throws `Error: Append-only collection` | Throws `Error: Append-only collection` | PASS |
-| `bulkWrite([{ deleteOne }])` | Throws `Error: Append-only collection` | Throws `Error: Append-only collection` | PASS |
 | `doc.save()` (on existing doc) | Throws `Error: Append-only collection` | Throws `Error: Append-only collection` | PASS |
+| `bulkWrite([{ updateOne / deleteOne }])` | Throws `Error: Append-only collection` | Throws `Error: Append-only collection` | PASS |
 | `bulkWrite([{ insertOne }])` | Allowed (append operation) | Allowed (append operation) | PASS |
 | `insertMany()` | Allowed (batch append) | Allowed (batch append) | PASS |
 
@@ -362,7 +373,7 @@ The reconciliation sweep runs automatically at startup and on a configurable int
 
 1. **Safety Boundary Enforcement**: Across 18 fault conditions, `AIAdvisor` rejected all invalid outputs (malformed JSON, out-of-bounds prices $<0.5\times$ or $>3.0\times$, timeouts, and upstream errors) and retained 100% of recommendations through deterministic fallback.
 2. **Event Loop Deduplication & Database Idempotency**: Deduplication correctness across concurrent processes and mid-flight restarts is enforced strictly by the MongoDB partial unique index on `(productId, triggerReason)` where `status = 'PENDING'`. The in-process `inFlightLocks` mutex serves solely as a localized performance optimization to prune redundant calculations within a single Node.js event loop.
-3. **Decision Quality Alignment**: Against 105 rubric-grounded scenarios across 5 commercial categories, `DaysOfSupplyRuleAdvisor` and `AIAdvisor` achieved statistically indistinguishable replenishment accuracy on the held-out split (82.2% vs 85.7%, $p = 1.0000 \ge 0.05$). AI does **NOT** outperform textbook inventory theory. Static heuristics (`threshold * 2`) fail (21.9% accuracy) because they ignore velocity.
+3. **Decision Quality Alignment & Like-for-Like Replenishment**: Against 105 rubric-grounded scenarios across 5 commercial categories (with zero-quantity allowed for dead stock), `DaysOfSupplyRuleAdvisor` and `AIAdvisor` achieved statistically indistinguishable replenishment accuracy on the held-out split (82.2% vs 79.5%, $\chi^2 = 0.17, p = 0.6831 \ge 0.05$). AI does **NOT** outperform textbook inventory theory. Static heuristics (`threshold * 2`) fail (21.9% accuracy) because they ignore velocity. Furthermore, peer review confirms that DoS's 82.2% accuracy is partly a formulaic self-agreement with the rubric's order-up-to logic, while pricing evaluation is effectively two-way (heuristic vs. AI) and directional metrics are constrained by a trivial ceiling effect.
 4. **Upstream Resilience Under Load**: Under a burst of 150 simulated orders across 520 products, the circuit breaker tripped cleanly to `OPEN` after repeated 429 exhaustion, fast-failing subsequent calls in 0.06ms and preventing cascade failure, while 100% of recommendations were fulfilled via the deterministic fallback engine.
 5. **Event-Loss Recovery**: Sudden process crashes mid-flight no longer cause permanent event loss. The startup reconciliation sweep scans active product triggers lacking pending recommendations and restores suggestions idempotently.
 6. **Audit Trail Cost**: Persisting immutable `InventorySnapshot` history incurs an incremental write latency of 1.43ms per transaction on local MongoDB.

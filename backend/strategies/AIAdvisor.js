@@ -147,8 +147,8 @@ class AIAdvisor extends CommerceAdvisor {
     } else if (type === 'reorder') {
       const qty = Number(value.recommendedQuantity);
       const maxAllowedQty = Math.max(product.reorderThreshold * 20, 10000);
-      if (qty < 1 || qty > maxAllowedQty) {
-        const err = new Error(`Plausibility check failed: absurd reorder quantity ${qty} (valid range: [1, ${maxAllowedQty}])`);
+      if (qty < 0 || qty > maxAllowedQty) {
+        const err = new Error(`Plausibility check failed: absurd reorder quantity ${qty} (valid range: [0, ${maxAllowedQty}])`);
         err.code = 'IMPLAUSIBLE_OUTPUT';
         throw err;
       }

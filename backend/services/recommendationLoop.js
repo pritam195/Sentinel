@@ -211,7 +211,7 @@ export async function processInventoryChange(product) {
 
       if (!existingReorder) {
         const rSuggestion = await strategy.suggestReorder(product, triggerReason);
-        if (rSuggestion && rSuggestion.recommendedQuantity >= 1) {
+        if (rSuggestion && rSuggestion.recommendedQuantity >= 0) {
           const rawQuantity = rSuggestion.rawRecommendedQuantity ?? rSuggestion.rawQuantity ?? rSuggestion.recommendedQuantity;
           const outcome = rSuggestion.isFallback
             ? 'FALLBACK'

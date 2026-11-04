@@ -4,7 +4,7 @@ const reorderSuggestionSchema = new mongoose.Schema({
   productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
   currentStock: { type: Number, required: true, min: 0 },
   stockAtGeneration: { type: Number, required: true, min: 0 },
-  recommendedQuantity: { type: Number, required: true, min: 1 },
+  recommendedQuantity: { type: Number, required: true, min: 0 },
   rawRecommendedQuantity: { type: Number, required: false },
   rawQuantity: { type: Number, required: false },
   wasClamped: { type: Boolean, default: false },

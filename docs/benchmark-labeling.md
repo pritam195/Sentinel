@@ -114,7 +114,24 @@ The 105-scenario suite incorporates the following mandatory edge case distributi
 
 ---
 
-## 8. Formal Human Sign-Off
+## 8. Peer Review & Methodological Limitations (Second-Reader Assessment)
+
+An informal second-reader review identified three foundational methodological limitations in this benchmark:
+
+1. **Label Circularity on Inventory Replenishment**:
+   The rubric for reorder quantity (Section 5) specifies target replenishment as:
+   $$Q_{\text{target}} = \max(0, \; (\text{demandVelocity} \times \text{targetDaysOfSupply} + S_s) - \text{stockLevel})$$
+   Because `DaysOfSupplyRuleAdvisor` implements the exact textbook order-up-to periodic-review policy ($L=7\text{d}, R=7\text{d}, S_s=3\text{d}$), its high accuracy (82.2% on held-out split) is fundamentally a demonstration of **formulaic self-agreement** with the rubric rather than an empirical validation against real-world commercial outcomes.
+
+2. **Pricing Comparison is Effectively Two-Way, Not Three-Way**:
+   `NaiveRule` and `DaysOfSupplyRule` implement identical pricing heuristics (10% increase on low stock, 5% increase on demand surge). Consequently, both rule advisors produce identical pricing predictions (68/73 = 93.2% window accuracy, 98.5% price proximity on held-out split). Pricing evaluation is therefore strictly a two-way comparison between the baseline heuristic and the AI advisor.
+
+3. **Directional Triviality & Ceiling Effect**:
+   A completely velocity-blind rule achieves 100% directional accuracy on the dataset. A 3-class decision (`INCREASE`, `DECREASE`, `HOLD`) on low-stock and demand-surge scenarios is trivially saturated by simple threshold checks. Directional agreement provides zero discriminatory power regarding recommendation intelligence or pricing optimization quality.
+
+---
+
+## 9. Formal Human Sign-Off
 
 I confirm that I have reviewed the benchmark scenarios, synthetic labeling methodology, and rubric constraints in this document.
 
@@ -123,5 +140,6 @@ I confirm that I have reviewed the benchmark scenarios, synthetic labeling metho
 - **Title / Domain Role**: __________________________________________________
 - **Date**:               __________________________________________________
 - **Sign-Off Status**:    [ ] APPROVED   [ ] REJECTED   [ ] REVISIONS REQUIRED
+
 
 

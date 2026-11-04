@@ -87,14 +87,14 @@ graph TD
 
 | Defense Layer | Mechanism | Protection Scope |
 |---|---|---|
-| **Upstream Resilience** | Concurrency Semaphore (max 5 in-flight), Circuit Breaker (`CLOSED`, `OPEN`, `HALF_OPEN`), Exponential Backoff with Jitter | Mitigates cascading failures during Gemini API throttling or 429 rate limits |
+| **Upstream Resilience** | Concurrency Semaphore (max 5 in-flight default; test suite overrides to 2 to verify saturation), Circuit Breaker (`CLOSED`, `OPEN`, `HALF_OPEN`), Exponential Backoff with Jitter | Mitigates cascading failures during Gemini API throttling or 429 rate limits |
 | **Idempotency & Deduplication** | MongoDB partial unique index on `(productId, triggerReason)` where `status = "PENDING"` (with an in-process `inFlightLocks` mutex optimization) | Deduplication correctness is enforced strictly at the database layer via partial unique index (`E11000`). The in-memory mutex is an in-process compute optimization; multi-process and restart correctness relies entirely on MongoDB. |
 | **Margin & Price Floors** | Floor clamp: $\max(\text{costPrice} \times (1 + \text{minMargin}), \; 0.5 \times \text{currentPrice})$ | Prevents negative gross margin sales and predatory underpricing |
-| **Volatility Clamps** | Configurable `maxSingleChangePercent` (default 20%) and `maxChangesPer24h` (default 5 changes / SKU / 24h) | Inhibits rapid price oscillations and automated runaway repricing |
+| **Volatility Clamps** | Configurable `maxSingleChangePercent` (default 20%; tests override to 15%) and `maxChangesPer24h` (default 5 changes / SKU / 24h; tests override to 3) | Inhibits rapid price oscillations and automated runaway repricing |
 | **Optimistic Concurrency & Staleness** | Pricing suggestions track `priceVersion` (bumping on price/cost changes); Reorder suggestions track `stockAtGeneration` with drift threshold ($\le 25\%$) | Rejects with **409 Conflict** and marks suggestion `STALE` if priceVersion changed or stock drifted $>25\%$. Normal purchases do not invalidate pricing suggestions. |
 | **TTL Auto-Expiration** | Configurable `expiresAt` (default 24h) with automatic background sweeper | Moves unacted suggestions to `EXPIRED` (rejects with **410 Gone** if attempted) |
 | **RBAC & Audit Trail** | JWT Auth: `VIEWER` (read-only), `MERCHANDISER` (accept/reject), `ADMIN` (config strategy). Stamped acting user ID on all mutations | Server-side role enforcement on login; tracks `actedBy` on suggestions, snapshots, and `changedBy` on price history |
-| **Append-Only Integrity** | Mongoose query, document, and model hooks intercept all 11 modification and deletion methods on audit collections | Protects `InventorySnapshot` and `AdvisorLog` against application-level modification or deletion |
+| **Append-Only Integrity** | Mongoose query, document, and model hooks intercept 10 distinct mutation operations across audit collections | Protects `InventorySnapshot` and `AdvisorLog` against application-level modification or deletion |
 | **Event-Loss Recovery** | Startup & periodic reconciliation sweep (default 15m interval) scanning MongoDB for active triggers lacking pending suggestions | Automatically re-emits `inventory:changed` events after unexpected process crashes or restarts |
 
 ---
@@ -118,21 +118,23 @@ All performance figures, reliability rates, and benchmark comparisons are measur
 | **Fault Injection** | 18 fault conditions (malformed JSON, extreme out-of-bounds prices $<0.5\times$ or $>3.0\times$, timeouts, socket errors) | **18/18 (100.0%) safe fallback, 0 lost suggestions** |
 | **Multi-Process Concurrency** | 2 child Node processes firing 100 simultaneous events each at the same SKU | **0 duplicate suggestions** (exact 1 pricing and 1 reorder suggestion created) |
 | **Mid-Flight Crash & Restart Recovery** | Stock mutation followed by abrupt worker termination (code 137); startup reconciliation sweep executes | **0 duplicate suggestions** (clean crash recovery via DB partial index and startup sweep) |
-| **Upstream Throttling / 429 Burst** | 520 products, 150 customer orders; 44 advisor requests (24 reached Gemini, 20 bypassed by Circuit Breaker) | **44/44 suggestions retained** via circuit-breaker and rule fallback |
+| **Upstream Throttling / 429 Burst** | 520 products, 150 customer orders; 44 advisor requests against live Gemini 2.5 Flash Free Tier (24 reached Gemini API, 20 bypassed by Circuit Breaker) | **44/44 suggestions retained** via circuit-breaker and safe rule fallback |
 
 ### 2. 105-Scenario Merchandising Benchmark Summary
 
-Evaluated across 105 scenarios partitioned into **32 development (30.5%)** and **73 held-out (69.5%)** by a fixed deterministic seed (`seed=42`). Results compare three distinct advisors:
+Evaluated across 105 scenarios partitioned into **32 development (30.5%)** and **73 held-out (69.5%)** by a fixed deterministic seed (`seed=42`). Run as an algorithmic pipeline harness test against deterministic mock responses (`gemini-2.5-flash (deterministic mock)`) to permit CI verification without exhausting the provider's 20-request/day Free Tier daily ceiling. Results compare three distinct advisors:
 1. **NaiveRule**: Static threshold-based baseline ($\text{reorder quantity} = \max(0, 2 \times \text{threshold} - \text{stock})$).
 2. **DaysOfSupplyRule**: Standard periodic-review inventory control theory ($L=7\text{d}, R=7\text{d}, S_s=3\text{d}$ buffer; order-up-to level $S = \lceil 17 \times \text{velocity} \rceil - \text{stock}$).
-3. **AI Advisor**: LLM architecture evaluated strictly on answered scenarios (mock mode: `gemini-2.5-flash (mock)`; git commit `6b5f3fb`).
+3. **AI Advisor**: LLM architecture evaluated strictly on answered scenarios across all 105 cases with zero-quantity replenishment allowed for dead-stock scenarios.
 
 > [!NOTE]
-> **Methodology & Provenance Notice**:
+> **Methodology, Provenance & Peer-Review Disclosure**:
 > - Scenarios are synthetic retail merchandising archetypes.
-> - Ground truth labels are derived from the retail economic rubric in `docs/benchmark-labeling.md` and are pending human expert sign-off.
-> - The 100% directional agreement score represents a ceiling effect inherent in coarse 3-class directional heuristics (`INCREASE` / `DECREASE` / `HOLD`), which limits what directional agreement alone can reveal about pricing quality.
-> - **Empirical Finding**: On the held-out split, the AI Advisor does **NOT** outperform the textbook `DaysOfSupplyRule` advisor ($\chi^2 = 0.00, p = 1.0000 \ge 0.05$). Rather, both inventory theory and AI substantially outperform the naive static rule on replenishment sizing because they dynamically factor demand velocity into protection periods.
+> - Ground truth labels are derived programmatically from the retail economic rubric in `docs/benchmark-labeling.md` and are pending human expert sign-off.
+> - **Label Circularity**: The replenishment rubric target formula mirrors order-up-to logic ($Q_c + S_s - \text{stock}$); `DaysOfSupplyRule`'s 82.2% score is partly formulaic self-agreement.
+> - **Two-Way Pricing**: `NaiveRule` and `DaysOfSupply` implement identical pricing heuristics, making pricing effectively a two-way comparison (rule heuristic vs. AI).
+> - **Directional Ceiling**: The 100% directional agreement score represents a ceiling effect of coarse 3-class directional heuristics (`INCREASE` / `DECREASE` / `HOLD`), which limits what directional agreement alone can reveal about pricing quality.
+> - **Empirical Finding**: On the held-out split, the AI Advisor does **NOT** outperform the textbook `DaysOfSupplyRule` advisor ($\chi^2 = 0.17, p = 0.6831 \ge 0.05$). Rather, both inventory theory and AI substantially outperform the naive static rule on replenishment sizing because they dynamically factor demand velocity into protection periods.
 
 #### Held-Out Split Performance ($N = 73$ Scenarios)
 
@@ -141,20 +143,20 @@ Evaluated across 105 scenarios partitioned into **32 development (30.5%)** and *
 | **Directional Agreement** | **73/73 (100.0%)**<br>[95.0%, 100.0%] | **73/73 (100.0%)**<br>[95.0%, 100.0%] | **71/73 (97.3%)**<br>[90.5%, 99.2%] | $\chi^2 = 0.50, p = 0.4795$<br>**Statistically indistinguishable** ($p \ge 0.05$) |
 | **Price Accuracy (Acceptable Window)** | **68/73 (93.2%)**<br>[84.9%, 97.0%] | **68/73 (93.2%)**<br>[84.9%, 97.0%] | **66/73 (90.4%)**<br>[81.5%, 95.3%] | $\chi^2 = 0.50, p = 0.4795$<br>**Statistically indistinguishable** ($p \ge 0.05$) |
 | **Mean Price Proximity** | **98.5%** | **98.5%** | **98.6%** | Mean absolute difference: 0.1% |
-| **Reorder Quantity Accuracy** | **16/73 (21.9%)**<br>[14.0%, 32.7%] | **60/73 (82.2%)**<br>[71.9%, 89.3%] | **48/56 (85.7%)**\*<br>[74.3%, 92.6%] | $\chi^2 = 0.00, p = 1.0000$<br>**Statistically indistinguishable** ($p \ge 0.05$) |
-
-*\*Header Note: For AI reorder, 56 scenarios were answered and 17 fell back on dead stock under the integer schema constraint.*
+| **Reorder Quantity Accuracy** | **16/73 (21.9%)**<br>[14.0%, 32.7%] | **60/73 (82.2%)**<br>[71.9%, 89.3%] | **58/73 (79.5%)**<br>[68.8%, 87.1%] | $\chi^2 = 0.17, p = 0.6831$<br>**Statistically indistinguishable** ($p \ge 0.05$) |
 
 #### Development Split Performance ($N = 32$ Scenarios)
 - **Directional Agreement**: NaiveRule 32/32 (100%), DaysOfSupply 32/32 (100%), AIAdvisor 32/32 (100%)
 - **Price Accuracy**: NaiveRule 32/32 (100%), DaysOfSupply 32/32 (100%), AIAdvisor 32/32 (100%)
-- **Reorder Quantity Accuracy**: NaiveRule 6/32 (18.8%), DaysOfSupply 24/32 (75.0%), AIAdvisor 15/22 (68.2%) (DoS vs AI $\chi^2 = 0.50, p = 0.4795$)
+- **Reorder Quantity Accuracy**: NaiveRule 6/32 (18.8%), DaysOfSupply 24/32 (75.0%), AIAdvisor 20/32 (62.5%) (DoS vs AI $\chi^2 = 2.25, p = 0.1336$)
 
 ### 3. Per-Call Latency Profile
 
 Measured via high-resolution `performance.now()`:
-- **Rule-Based Engine**: Pricing $\text{p50} = 0.01\text{ ms}$, $\text{p95} = 0.01\text{ ms}$, $\text{p99} = 0.03\text{ ms}$; Reorder $\text{p50} = 0.00\text{ ms}$.
-- **Live Gemini 2.5 Flash**: Pricing $\text{p50} = 5,760\text{ ms}$, $\text{p95} = 8,335\text{ ms}$; Reorder $\text{p50} = 5,502\text{ ms}$, $\text{p95} = 5,912\text{ ms}$.
+- **Rule-Based Engine**: Pricing $\text{p50} = 0.00\text{ ms}$, $\text{p95} = 0.02\text{ ms}$, $\text{p99} = 0.04\text{ ms}$; Reorder $\text{p50} = 0.00\text{ ms}$, $\text{p95} = 0.01\text{ ms}$, $\text{p99} = 0.02\text{ ms}$.
+- **DaysOfSupply Engine**: Pricing $\text{p50} = 0.00\text{ ms}$, $\text{p95} = 0.01\text{ ms}$, $\text{p99} = 0.01\text{ ms}$; Reorder $\text{p50} = 0.00\text{ ms}$, $\text{p95} = 0.01\text{ ms}$, $\text{p99} = 0.02\text{ ms}$.
+- **AI Advisor (Mock Pipeline Harness / CI)**: $\text{p50} = 15.53\text{ ms}$, $\text{p95} = 17.05\text{ ms}$, $\text{p99} = 17.87\text{ ms}$.
+- **Live Gemini 2.5 Flash ($N=24$ requests)**: Pricing $\text{p50} = 5,760\text{ ms}$, $\text{p95} = 8,335\text{ ms}$, $\text{p99} = 8,335\text{ ms}$; Reorder $\text{p50} = 5,502\text{ ms}$, $\text{p95} = 5,912\text{ ms}$, $\text{p99} = 5,912\text{ ms}$.
 
 Rule-based decisions evaluate in sub-millisecond time, whereas live LLM calls require 5–8 seconds over the network ($\approx 500,000\times$ slower), supporting Sentinel's architecture of decoupled, asynchronous suggestion generation with deterministic fallback.
 
@@ -164,9 +166,9 @@ Rule-based decisions evaluate in sub-millisecond time, whereas live LLM calls re
 
 1. **In-Process EventEmitter & Event-Loss Scope**: Event dispatching relies on Node.js's in-process `EventEmitter`. Events currently queued in memory are lost if the Node process experiences a sudden crash before execution. The startup and periodic reconciliation sweep recovers persistent catalog trigger conditions (`stockLevel < reorderThreshold` or sustained demand surges) lacking pending suggestions, but cannot reconstruct unpersisted transient telemetry. Production multi-node scaling requires a persistent distributed message broker (e.g., Redis Streams, RabbitMQ, or Apache Kafka).
 2. **Single-Region Scope**: Database partial unique indexes and optimistic concurrency version checks (`priceVersion`, `stockAtGeneration`) enforce correctness across multi-process workers on a shared MongoDB database, but multi-region active-active deployments with cross-datacenter replication lag are not currently addressed.
-3. **Application-Level vs Database-Enforced Append-Only**: The append-only behavior of `InventorySnapshot` and `AdvisorLog` is enforced in application code via Mongoose model, query, and document middleware hooks (`updateOne`, `updateMany`, `replaceOne`, `findOneAndUpdate`, `findOneAndReplace`, `findOneAndDelete`, `deleteOne`, `deleteMany`, `bulkWrite`, and `save` on existing documents). Direct calls via `Model.collection.*`, raw MongoDB drivers, or administrative shell sessions bypass these application-level hooks. Database-level immutability requires configuring custom MongoDB roles (e.g., `readWrite` without `update` or `delete` privileges) on the production database user.
+3. **Application-Level vs Database-Enforced Append-Only**: The append-only behavior of `InventorySnapshot` and `AdvisorLog` is enforced in application code via Mongoose model, query, and document middleware hooks across 10 distinct mutation operations (`updateOne`, `updateMany`, `replaceOne`, `findOneAndUpdate`, `findOneAndReplace`, `findOneAndDelete`, `deleteOne`, `deleteMany`, `save` on existing documents, and model `bulkWrite` containing update/delete operations). Direct calls via `Model.collection.*`, raw MongoDB drivers, or administrative shell sessions bypass these application-level hooks. Database-level immutability requires configuring custom MongoDB roles (e.g., `readWrite` without `update` or `delete` privileges) on the production database user.
 4. **Synthetic Benchmark Scenarios & Ceiling Effects**: The 105 benchmark scenarios are synthetically constructed commercial archetypes across 5 retail categories. The 100% directional accuracy on coarse 3-class actions (`INCREASE`, `DECREASE`, `HOLD`) reflects an empirical ceiling effect that does not capture complex, long-tail real-world demand elasticity.
-5. **Benchmark Label Provenance & Sign-off**: Benchmark candidate ground truth labels are derived programmatically from the retail merchandising rubric in `docs/benchmark-labeling.md`. Until formal expert review and sign-off is completed via the signature block in that document, labels represent rubric-grounded candidate ground truth rather than verified expert human labels.
+5. **Benchmark Label Provenance & Sign-off**: Benchmark candidate ground truth labels are derived programmatically from the retail merchandising rubric in `docs/benchmark-labeling.md`. As detailed in the second-reader peer review (Section 8 of that document), the reorder rubric creates formulaic self-agreement with `DaysOfSupplyRule`, while identical pricing heuristics reduce pricing evaluation to a two-way comparison. Until formal expert review and sign-off is completed via the signature block in that document, labels represent rubric-grounded candidate ground truth rather than verified expert human labels.
 
 ---
 
