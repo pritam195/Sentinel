@@ -538,3 +538,4 @@ export default benchmarkScenarios;
 
 fs.writeFileSync(outputPath, fileContent, 'utf8');
 console.log(`Successfully generated ${scenarios.length} scenarios into ${outputPath}`);
+
