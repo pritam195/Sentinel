@@ -11,7 +11,7 @@ Sentinel is a full-stack commerce decision system that autonomously detects inve
 Most autonomous pricing and inventory tools force a choice between rigid manual spreadsheets and opaque AI systems that can make unbounded, uninspected decisions. Sentinel is built around a different operational premise: **AI-generated commerce decisions should be fast to propose, but slow to trust.**
 
 1. **Fast to propose**: When stock dips or demand surges, the engine evaluates catalog telemetry within milliseconds (rule path: $\le 0.01\text{ ms}$) or seconds (LLM path: $\sim 5.7\text{ s}$), drafting reasoned proposals.
-2. **Slow to trust**: Suggestions are strictly advisory. Every recommendation is bounded by margin floors, rate clamps, and schema validators. Suggestions enter a `PENDING` queue protected by optimistic concurrency and RBAC. Mutating live prices or issuing purchase orders requires explicit review by an authorized merchandiser or admin. If the LLM times out, errors, or hits rate limits, the system safely falls back to deterministic logic without dropping events.
+2. **Slow to trust**: Suggestions are strictly advisory. Every recommendation is bounded by margin floors, rate clamps, and schema validators. Suggestions enter a `PENDING` queue protected by optimistic concurrency and RBAC. Mutating live prices or issuing purchase orders requires explicit review by an authorized merchandiser or admin. If the LLM times out, errors, or hits rate limits, the suggestion pipeline falls back to deterministic rule-based logic (preserving recommendation generation for that trigger). For process restarts or mid-flight worker crashes where an in-memory event was lost before completion, a reconciliation sweep scans MongoDB at boot and on a configurable interval (default: 15 minutes) to re-emit events for active trigger conditions lacking pending suggestions. Note that the reconciliation sweep covers persistent inventory states (e.g., stock below threshold or sustained demand surges) where trigger criteria still evaluate to true; transient point-in-time velocity spikes that have already decayed in memory before database persistence or reconciliation are not recoverable without an external persistent event log.
 
 ---
 
@@ -28,7 +28,7 @@ graph TD
 
     subgraph API["Express 5 API & Auth Boundary"]
         AuthMid["JWT Auth & RBAC (Viewer, Merchandiser, Admin)"]
-        RoutesAuth["/auth/token, /auth/me"]
+        RoutesAuth["/auth/login, /auth/dev-token, /auth/me"]
         RoutesProd["/products"]
         RoutesSugg["/pricing-suggestions, /reorder-suggestions"]
         RoutesConfig["/config/strategy, /config/advisor-health"]
@@ -38,20 +38,21 @@ graph TD
     subgraph Core["Event-Driven Core & Guardrails"]
         EventEmitter["In-Process EventEmitter"]
         AgentLoop["Recommendation Loop"]
-        DedupeLocks["In-Flight Mutex & DB Unique Index"]
-        Guardrails["Margin Floor, 24h Quota & Single-Change Clamps"]
+        DedupeLocks["MongoDB Partial Unique Index (inFlightLocks optimization)"]
+        Guardrails["3-Stage Validation Pipeline (Schema, Plausibility, Policy)"]
         TTLWorker["Suggestion TTL Expiration Sweeper"]
+        Reconcile["Startup & Periodic Reconciliation Sweeper"]
     end
 
     subgraph Engines["Advisors & Upstream Resilience"]
         Registry["Strategy Registry"]
-        RuleAdvisor["RuleBasedAdvisor"]
+        RuleAdvisor["NaiveRule / DaysOfSupplyRule"]
         AIAdvisor["AIAdvisor (Gemini 2.5 Flash)"]
         Resilience["Semaphore (5) + Circuit Breaker + Backoff / Retry-After"]
     end
 
     subgraph Storage["MongoDB (Application-Enforced Append-Only Audit)"]
-        DB_Prod[("Products, Price History & Version (__v)")]
+        DB_Prod[("Products, Price History & priceVersion")]
         DB_Sugg[("Pending / Accepted / Rejected / Stale Suggestions")]
         DB_Snap[("InventorySnapshots (actedBy)")]
         DB_Logs[("AdvisorLogs (fallbackReason enum)")]
@@ -63,6 +64,7 @@ graph TD
     UI --> RoutesConfig
     UI --> SSEStream
     RoutesProd -- "inventory:changed" --> EventEmitter
+    Reconcile -- "re-emits active triggers" --> EventEmitter
     EventEmitter --> AgentLoop
     AgentLoop --> DedupeLocks
     DedupeLocks --> Guardrails
@@ -83,14 +85,15 @@ graph TD
 
 | Defense Layer | Mechanism | Protection Scope |
 |---|---|---|
-| **Upstream Resilience** | Concurrency Semaphore (max 5 in-flight), Circuit Breaker (`CLOSED`, `OPEN`, `HALF_OPEN`), Exponential Backoff with Jitter | Prevents cascading failures during Gemini API throttling or 429 rate limits |
-| **Idempotency & Concurrency** | In-flight mutex (`inFlightLocks`) + MongoDB partial unique index on `(productId, triggerReason)` where `status = "PENDING"` | **0 duplicate suggestions** across 200 concurrent events dispatched over multi-process child nodes and mid-flight restarts |
+| **Upstream Resilience** | Concurrency Semaphore (max 5 in-flight), Circuit Breaker (`CLOSED`, `OPEN`, `HALF_OPEN`), Exponential Backoff with Jitter | Mitigates cascading failures during Gemini API throttling or 429 rate limits |
+| **Idempotency & Deduplication** | MongoDB partial unique index on `(productId, triggerReason)` where `status = "PENDING"` (with an in-process `inFlightLocks` mutex optimization) | Deduplication correctness is enforced strictly at the database layer via partial unique index (`E11000`). The in-memory mutex is an in-process compute optimization; multi-process and restart correctness relies entirely on MongoDB. |
 | **Margin & Price Floors** | Floor clamp: $\max(\text{costPrice} \times (1 + \text{minMargin}), \; 0.5 \times \text{currentPrice})$ | Prevents negative gross margin sales and predatory underpricing |
-| **Volatility Clamps** | Configurable `maxSingleChangePercent` (default 15%) and `maxChangesPer24h` (default 3 changes / SKU / 24h) | Inhibits rapid price oscillations and automated runaway repricing |
-| **Optimistic Concurrency & Staleness** | Suggestion records `productVersion` (`__v`) and `productUpdatedAt`; on acceptance, verifies product hasn't mutated | Rejects with **409 Conflict** and marks suggestion `STALE` if inventory or price changed post-generation |
+| **Volatility Clamps** | Configurable `maxSingleChangePercent` (default 20%) and `maxChangesPer24h` (default 5 changes / SKU / 24h) | Inhibits rapid price oscillations and automated runaway repricing |
+| **Optimistic Concurrency & Staleness** | Pricing suggestions track `priceVersion` (bumping on price/cost changes); Reorder suggestions track `stockAtGeneration` with drift threshold ($\le 25\%$) | Rejects with **409 Conflict** and marks suggestion `STALE` if priceVersion changed or stock drifted $>25\%$. Normal purchases do not invalidate pricing suggestions. |
 | **TTL Auto-Expiration** | Configurable `expiresAt` (default 24h) with automatic background sweeper | Moves unacted suggestions to `EXPIRED` (rejects with **410 Gone** if attempted) |
-| **RBAC & Audit Trail** | JWT Auth: `VIEWER` (read-only), `MERCHANDISER` (accept/reject), `ADMIN` (config strategy). Stamped acting user ID on all mutations | Role-enforced transitions; tracks `actedBy` on suggestions, snapshots, and price history |
-| **Append-Only Integrity** | Mongoose pre-hooks disallow `updateOne`, `deleteMany`, `findOneAndUpdate`, and existing doc `save` on audit collections | Protects `InventorySnapshot` and `AdvisorLog` against accidental or malicious application-level tampering |
+| **RBAC & Audit Trail** | JWT Auth: `VIEWER` (read-only), `MERCHANDISER` (accept/reject), `ADMIN` (config strategy). Stamped acting user ID on all mutations | Server-side role enforcement on login; tracks `actedBy` on suggestions, snapshots, and `changedBy` on price history |
+| **Append-Only Integrity** | Mongoose query, document, and model hooks intercept all 11 modification and deletion methods on audit collections | Protects `InventorySnapshot` and `AdvisorLog` against application-level modification or deletion |
+| **Event-Loss Recovery** | Startup & periodic reconciliation sweep (default 15m interval) scanning MongoDB for active triggers lacking pending suggestions | Automatically re-emits `inventory:changed` events after unexpected process crashes or restarts |
 
 ---
 
@@ -112,15 +115,15 @@ All performance figures, reliability rates, and benchmark comparisons are measur
 |---|---|---|
 | **Fault Injection** | 18 fault conditions (malformed JSON, extreme out-of-bounds prices $<0.5\times$ or $>3.0\times$, timeouts, socket errors) | **18/18 (100.0%) safe fallback, 0 lost suggestions** |
 | **Multi-Process Concurrency** | 2 child Node processes firing 100 simultaneous events each at the same SKU | **0 duplicate suggestions** (exact 1 pricing and 1 reorder suggestion created) |
-| **Mid-Flight Crash Recovery** | Child process killed mid-flight while processing events, followed by recovery process | **0 duplicate suggestions** (clean crash recovery via DB partial index) |
-| **Upstream Throttling / 429 Burst** | 520 products, 150 customer orders; 68 concurrent triggers against Gemini rate limits | **68/68 suggestions retained** via circuit-breaker and rule fallback |
+| **Mid-Flight Crash & Restart Recovery** | Stock mutation followed by abrupt worker termination (code 137); startup reconciliation sweep executes | **0 duplicate suggestions** (clean crash recovery via DB partial index and startup sweep) |
+| **Upstream Throttling / 429 Burst** | 520 products, 150 customer orders; 44 advisor requests (24 reached Gemini, 20 bypassed by Circuit Breaker) | **44/44 suggestions retained** via circuit-breaker and rule fallback |
 
 ### 2. 105-Scenario Merchandising Benchmark Summary
 
 Evaluated across 105 scenarios partitioned into **32 development (30.5%)** and **73 held-out (69.5%)** by a fixed deterministic seed (`seed=42`). Results compare three distinct advisors:
 1. **NaiveRule**: Static threshold-based baseline ($\text{reorder quantity} = \max(0, 2 \times \text{threshold} - \text{stock})$).
 2. **DaysOfSupplyRule**: Standard periodic-review inventory control theory ($L=7\text{d}, R=7\text{d}, S_s=3\text{d}$ buffer; order-up-to level $S = \lceil 17 \times \text{velocity} \rceil - \text{stock}$).
-3. **AI Advisor**: LLM architecture evaluated strictly on answered scenarios (mock mode: `gemini-2.5-flash (mock)`; git commit `2f29a76`).
+3. **AI Advisor**: LLM architecture evaluated strictly on answered scenarios (mock mode: `gemini-2.5-flash (mock)`; git commit `6b5f3fb`).
 
 > [!NOTE]
 > **Methodology & Provenance Notice**:
@@ -157,10 +160,11 @@ Rule-based decisions evaluate in sub-millisecond time, whereas live LLM calls re
 
 ## Known Limitations
 
-1. **In-Process EventEmitter (No Distributed Message Broker)**: Event dispatching relies on Node.js's in-process `EventEmitter`. Events currently queued in memory are lost if the Node process experiences a sudden crash before execution (though persisted state is protected by database idempotency indexes). A production multi-instance deployment should replace the in-process emitter with a distributed message broker (e.g., Redis Streams, RabbitMQ, or Apache Kafka).
-2. **Single-Region Scope**: Database indexes and optimistic concurrency locks guarantee correctness across multi-process workers on a shared MongoDB database, but multi-region active-active deployments with cross-datacenter replication lag are not currently addressed.
-3. **Application-Level vs Database-Enforced Append-Only**: The append-only behavior of `InventorySnapshot` and `AdvisorLog` is enforced in application code via Mongoose model and document middleware hooks (`updateOne`, `updateMany`, `replaceOne`, `findOneAndUpdate`, `findOneAndReplace`, `findOneAndDelete`, `deleteOne`, `deleteMany`, `bulkWrite`, and `save` on existing documents). Direct calls via `Model.collection.*`, raw MongoDB drivers, or administrative shell sessions bypass these application-level hooks. True database-level immutability requires configuring custom MongoDB roles (e.g., `readWrite` without `update` or `delete` privileges) on the production database user.
-4. **Benchmark Label Provenance**: Benchmark labels are defined by the objective retail merchandising rubric in `docs/benchmark-labeling.md`. Until formal human review is complete, labels represent rubric-grounded candidate ground truth rather than verified expert human labels.
+1. **In-Process EventEmitter & Event-Loss Scope**: Event dispatching relies on Node.js's in-process `EventEmitter`. Events currently queued in memory are lost if the Node process experiences a sudden crash before execution. The startup and periodic reconciliation sweep recovers persistent catalog trigger conditions (`stockLevel < reorderThreshold` or sustained demand surges) lacking pending suggestions, but cannot reconstruct unpersisted transient telemetry. Production multi-node scaling requires a persistent distributed message broker (e.g., Redis Streams, RabbitMQ, or Apache Kafka).
+2. **Single-Region Scope**: Database partial unique indexes and optimistic concurrency version checks (`priceVersion`, `stockAtGeneration`) enforce correctness across multi-process workers on a shared MongoDB database, but multi-region active-active deployments with cross-datacenter replication lag are not currently addressed.
+3. **Application-Level vs Database-Enforced Append-Only**: The append-only behavior of `InventorySnapshot` and `AdvisorLog` is enforced in application code via Mongoose model, query, and document middleware hooks (`updateOne`, `updateMany`, `replaceOne`, `findOneAndUpdate`, `findOneAndReplace`, `findOneAndDelete`, `deleteOne`, `deleteMany`, `bulkWrite`, and `save` on existing documents). Direct calls via `Model.collection.*`, raw MongoDB drivers, or administrative shell sessions bypass these application-level hooks. Database-level immutability requires configuring custom MongoDB roles (e.g., `readWrite` without `update` or `delete` privileges) on the production database user.
+4. **Synthetic Benchmark Scenarios & Ceiling Effects**: The 105 benchmark scenarios are synthetically constructed commercial archetypes across 5 retail categories. The 100% directional accuracy on coarse 3-class actions (`INCREASE`, `DECREASE`, `HOLD`) reflects an empirical ceiling effect that does not capture complex, long-tail real-world demand elasticity.
+5. **Benchmark Label Provenance & Sign-off**: Benchmark candidate ground truth labels are derived programmatically from the retail merchandising rubric in `docs/benchmark-labeling.md`. Until formal expert review and sign-off is completed via the signature block in that document, labels represent rubric-grounded candidate ground truth rather than verified expert human labels.
 
 ---
 
@@ -216,12 +220,13 @@ npm run dev                # Starts Vite dev server on http://localhost:5173
 ### Running Test Suites
 ```bash
 cd backend
-npm test                   # Run core test suites (fault, concurrency, resilience, guardrails, auth)
+npm test                   # Run core test suites (fault, concurrency, resilience, guardrails, auth, recovery)
 npm run test:fault         # 18-case fault-injection battery
 npm run test:concurrency   # In-process, multi-process (2x100), and mid-flight restart tests
 npm run test:resilience    # Upstream semaphore, backoff, and circuit breaker tests
 npm run test:guardrails    # Margin floors, 24h limits, optimistic concurrency, and TTL tests
 npm run test:auth          # JWT authentication, RBAC, and append-only hook tests
+npm run test:recovery      # Mid-flight crash and startup reconciliation recovery test
 npm run test:benchmark     # 105-scenario rule vs. AI evaluation with Wilson CIs & McNemar test
 npm run test:load          # 520-product scale test with 150 simulated order events
 npm run test:all           # Complete automated test battery

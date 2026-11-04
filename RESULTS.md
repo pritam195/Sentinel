@@ -354,14 +354,14 @@ Both `InventorySnapshot` and `AdvisorLog` collections are strictly append-only. 
   [PASS] Idempotency verified: exactly 1 reorder suggestion remains (observed: 1)
 ```
 
-The reconciliation sweep runs automatically at startup and on a configurable interval (default: 15 minutes, configurable via `reconciliationIntervalMinutes` in `Config` or `RECONCILIATION_INTERVAL_MINUTES` env). It detects active trigger conditions (`stockLevel < reorderThreshold` or demand surges) where no `PENDING` suggestion currently exists and safely re-emits `inventory:changed` events. The partial unique index on `{ productId: 1, triggerReason: 1 }` guarantees that concurrent or repeated sweeps cannot produce duplicate pending suggestions.
+The reconciliation sweep runs automatically at startup and on a configurable interval (default: 15 minutes, configurable via `reconciliationIntervalMinutes` in `Config` or `RECONCILIATION_INTERVAL_MINUTES` env). It detects active trigger conditions (`stockLevel < reorderThreshold` or demand surges) where no `PENDING` suggestion currently exists and safely re-emits `inventory:changed` events. The partial unique index on `{ productId: 1, triggerReason: 1 }` enforces that concurrent or repeated sweeps reject duplicate pending suggestions via duplicate key errors (`E11000`).
 
 ---
 
 ## 11. Summary of Architectural Findings
 
 1. **Safety Boundary Enforcement**: Across 18 fault conditions, `AIAdvisor` rejected all invalid outputs (malformed JSON, out-of-bounds prices $<0.5\times$ or $>3.0\times$, timeouts, and upstream errors) and retained 100% of recommendations through deterministic fallback.
-2. **Event Loop Deduplication**: Under 100 concurrent inventory events fired in rapid succession, the deduplication locks and partial unique MongoDB index prevented duplicate `PENDING` suggestions, resulting in exactly 0 duplicate suggestions.
+2. **Event Loop Deduplication & Database Idempotency**: Deduplication correctness across concurrent processes and mid-flight restarts is enforced strictly by the MongoDB partial unique index on `(productId, triggerReason)` where `status = 'PENDING'`. The in-process `inFlightLocks` mutex serves solely as a localized performance optimization to prune redundant calculations within a single Node.js event loop.
 3. **Decision Quality Alignment**: Against 105 rubric-grounded scenarios across 5 commercial categories, `DaysOfSupplyRuleAdvisor` and `AIAdvisor` achieved statistically indistinguishable replenishment accuracy on the held-out split (82.2% vs 85.7%, $p = 1.0000 \ge 0.05$). AI does **NOT** outperform textbook inventory theory. Static heuristics (`threshold * 2`) fail (21.9% accuracy) because they ignore velocity.
 4. **Upstream Resilience Under Load**: Under a burst of 150 simulated orders across 520 products, the circuit breaker tripped cleanly to `OPEN` after repeated 429 exhaustion, fast-failing subsequent calls in 0.06ms and preventing cascade failure, while 100% of recommendations were fulfilled via the deterministic fallback engine.
 5. **Event-Loss Recovery**: Sudden process crashes mid-flight no longer cause permanent event loss. The startup reconciliation sweep scans active product triggers lacking pending recommendations and restores suggestions idempotently.

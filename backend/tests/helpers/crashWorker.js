@@ -27,3 +27,4 @@ run().catch((err) => {
   console.error('CrashWorker error:', err);
   process.exit(1);
 });
+
