@@ -3,7 +3,7 @@ import mongoose from 'mongoose';
 const productSchema = new mongoose.Schema({
   sku: { type: String, required: true, unique: true },
   name: { type: String, required: true },
-  category: { type: String, enum: ['ELECTRONICS', 'APPAREL', 'HOME'], required: true },
+  category: { type: String, enum: ['ELECTRONICS', 'APPAREL', 'HOME', 'BEAUTY', 'GROCERY'], required: true },
   currentPrice: { type: Number, required: true, min: 0.01 },
   stockLevel: { type: Number, required: true, min: 0 },
   reorderThreshold: { type: Number, required: true, min: 0 },

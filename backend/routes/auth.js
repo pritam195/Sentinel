@@ -39,3 +39,4 @@ router.get('/me', authenticateJWT, (req, res) => {
 });
 
 export default router;
+
