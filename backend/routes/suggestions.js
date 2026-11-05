@@ -49,7 +49,7 @@ router.patch('/pricing-suggestions/:id', authenticateJWT, requireRole(ROLES.MERC
     // Check if expired
     if (suggestion.status === 'EXPIRED' || (suggestion.expiresAt && new Date(suggestion.expiresAt) <= new Date())) {
       suggestion.status = 'EXPIRED';
-      await suggestion.save();
+      await PricingSuggestion.updateOne({ _id: suggestion._id, status: 'PENDING' }, { $set: { status: 'EXPIRED' } });
       const product = await Product.findById(suggestion.productId);
       if (product) {
         await restoreProductStatusWhenResolved(product);
@@ -72,9 +72,12 @@ router.patch('/pricing-suggestions/:id', authenticateJWT, requireRole(ROLES.MERC
       const versionChanged = suggestion.priceVersion !== undefined && product.priceVersion !== suggestion.priceVersion;
 
       if (versionChanged) {
+        await PricingSuggestion.updateOne(
+          { _id: suggestion._id, status: 'PENDING' },
+          { $set: { status: 'STALE', actedBy: actingUserId } }
+        );
         suggestion.status = 'STALE';
         suggestion.actedBy = actingUserId;
-        await suggestion.save();
         await restoreProductStatusWhenResolved(product);
         await product.save();
         return res.status(409).json({
@@ -83,28 +86,44 @@ router.patch('/pricing-suggestions/:id', authenticateJWT, requireRole(ROLES.MERC
         });
       }
 
-      suggestion.status = status;
-      suggestion.actedBy = actingUserId;
-      await suggestion.save();
+      // Atomically claim transition to ACCEPTED
+      const updatedSuggestion = await PricingSuggestion.findOneAndUpdate(
+        { _id: suggestion._id, status: 'PENDING' },
+        { $set: { status: 'ACCEPTED', actedBy: actingUserId } },
+        { returnDocument: 'after' }
+      );
 
-      product.currentPrice = suggestion.recommendedPrice;
+      if (!updatedSuggestion) {
+        const latest = await PricingSuggestion.findById(suggestion._id);
+        return res.status(400).json({ error: `Suggestion already processed with status: ${latest?.status || 'PROCESSED'}` });
+      }
+
+      product.currentPrice = updatedSuggestion.recommendedPrice;
       product.priceVersion = (product.priceVersion || 1) + 1;
-      product.priceHistory.push({ price: suggestion.recommendedPrice, changedBy: actingUserId });
+      product.priceHistory.push({ price: updatedSuggestion.recommendedPrice, changedBy: actingUserId });
       await restoreProductStatusWhenResolved(product);
       await product.save();
+      return res.json(updatedSuggestion);
     } else {
-      suggestion.status = status;
-      suggestion.actedBy = actingUserId;
-      await suggestion.save();
+      // Atomically claim transition to REJECTED
+      const updatedSuggestion = await PricingSuggestion.findOneAndUpdate(
+        { _id: suggestion._id, status: 'PENDING' },
+        { $set: { status: 'REJECTED', actedBy: actingUserId } },
+        { returnDocument: 'after' }
+      );
+
+      if (!updatedSuggestion) {
+        const latest = await PricingSuggestion.findById(suggestion._id);
+        return res.status(400).json({ error: `Suggestion already processed with status: ${latest?.status || 'PROCESSED'}` });
+      }
 
       const product = await Product.findById(suggestion.productId);
       if (product) {
         await restoreProductStatusWhenResolved(product);
         await product.save();
       }
+      return res.json(updatedSuggestion);
     }
-
-    res.json(suggestion);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
@@ -174,9 +193,12 @@ router.patch('/reorder-suggestions/:id', authenticateJWT, requireRole(ROLES.MERC
       }
 
       if (drifted) {
+        await ReorderSuggestion.updateOne(
+          { _id: suggestion._id, status: 'PENDING' },
+          { $set: { status: 'STALE', actedBy: actingUserId } }
+        );
         suggestion.status = 'STALE';
         suggestion.actedBy = actingUserId;
-        await suggestion.save();
         await restoreProductStatusWhenResolved(product);
         await product.save();
         return res.status(409).json({
@@ -185,27 +207,43 @@ router.patch('/reorder-suggestions/:id', authenticateJWT, requireRole(ROLES.MERC
         });
       }
 
-      suggestion.status = status;
-      suggestion.actedBy = actingUserId;
-      await suggestion.save();
+      // Atomically claim transition to ACCEPTED
+      const updatedSuggestion = await ReorderSuggestion.findOneAndUpdate(
+        { _id: suggestion._id, status: 'PENDING' },
+        { $set: { status: 'ACCEPTED', actedBy: actingUserId } },
+        { returnDocument: 'after' }
+      );
 
-      product.stockLevel += suggestion.recommendedQuantity;
+      if (!updatedSuggestion) {
+        const latest = await ReorderSuggestion.findById(suggestion._id);
+        return res.status(400).json({ error: `Suggestion already processed with status: ${latest?.status || 'PROCESSED'}` });
+      }
+
+      product.stockLevel += updatedSuggestion.recommendedQuantity;
       await restoreProductStatusWhenResolved(product);
       await product.save();
       await recordInventorySnapshot(product, 'REORDER_ACCEPTED', actingUserId);
+      return res.json(updatedSuggestion);
     } else {
-      suggestion.status = status;
-      suggestion.actedBy = actingUserId;
-      await suggestion.save();
+      // Atomically claim transition to REJECTED
+      const updatedSuggestion = await ReorderSuggestion.findOneAndUpdate(
+        { _id: suggestion._id, status: 'PENDING' },
+        { $set: { status: 'REJECTED', actedBy: actingUserId } },
+        { returnDocument: 'after' }
+      );
+
+      if (!updatedSuggestion) {
+        const latest = await ReorderSuggestion.findById(suggestion._id);
+        return res.status(400).json({ error: `Suggestion already processed with status: ${latest?.status || 'PROCESSED'}` });
+      }
 
       const product = await Product.findById(suggestion.productId);
       if (product) {
         await restoreProductStatusWhenResolved(product);
         await product.save();
       }
+      return res.json(updatedSuggestion);
     }
-
-    res.json(suggestion);
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
