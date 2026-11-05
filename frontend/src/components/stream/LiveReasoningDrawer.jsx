@@ -36,9 +36,14 @@ export function LiveReasoningDrawer({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Syntax highlighting for json chunks
+  // Syntax highlighting for json chunks with entity escaping against XSS
   const formatStreamJSON = (raw) => {
-    return raw
+    if (!raw) return '';
+    const safe = raw
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    return safe
       .replace(/"([^"]+)":/g, '<span class="text-cyan-400 font-semibold">"$1"</span>:')
       .replace(/: "([^"]*)"/g, ': <span class="text-emerald-400">"$1"</span>')
       .replace(/: ([0-9.]+)/g, ': <span class="text-amber-400 font-bold">$1</span>');
