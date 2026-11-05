@@ -216,7 +216,12 @@ export async function executeWithResilience(fn, options = {}) {
   }
 
   // 2. Concurrency limiter guard
-  await semaphore.acquire(options.acquireTimeoutMs || 30000);
+  try {
+    await semaphore.acquire(options.acquireTimeoutMs || 30000);
+  } catch (err) {
+    breaker.recordFailure(false);
+    throw err;
+  }
 
   try {
     retryHandler.stats.totalCalls++;
