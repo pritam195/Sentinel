@@ -4,6 +4,7 @@ import Product from './models/Product.js';
 import PricingSuggestion from './models/PricingSuggestion.js';
 import ReorderSuggestion from './models/ReorderSuggestion.js';
 import InventorySnapshot from './models/InventorySnapshot.js';
+import AdvisorLog from './models/AdvisorLog.js';
 import { seedDefaultUsers } from './models/User.js';
 
 dotenv.config();
@@ -28,6 +29,7 @@ async function seed() {
     await PricingSuggestion.deleteMany({});
     await ReorderSuggestion.deleteMany({});
     await InventorySnapshot.collection.deleteMany({});
+    await AdvisorLog.collection.deleteMany({});
     console.log('Cleared existing data.');
 
     const products = await Product.insertMany(seedProducts);
