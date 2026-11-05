@@ -172,6 +172,19 @@ export async function processInventoryChange(product) {
             clampReason = `Clamped to max single change limit of -${maxSingleChangePercent}%`;
             reasoning += ` [${clampReason}]`;
           }
+
+          if (product.costPrice != null && product.costPrice > 0) {
+            const minMargin = product.minMarginPercent != null
+              ? (product.minMarginPercent > 1 ? product.minMarginPercent / 100 : product.minMarginPercent)
+              : 0;
+            const marginFloor = Math.round(product.costPrice * (1 + minMargin) * 100) / 100;
+            if (recommendedPrice < marginFloor) {
+              recommendedPrice = marginFloor;
+              wasClamped = true;
+              clampReason = `clamped to margin floor of $${marginFloor.toFixed(2)}`;
+              reasoning += ` [${clampReason}]`;
+            }
+          }
         }
 
         const outcome = pSuggestion.isFallback
