@@ -90,9 +90,18 @@ export class Semaphore {
 
     return new Promise((resolve, reject) => {
       let timer = null;
+      const entry = {
+        resolve: () => {
+          if (timer) clearTimeout(timer);
+          this.activeCount++;
+          resolve();
+        },
+        reject
+      };
+
       if (timeoutMs > 0) {
         timer = setTimeout(() => {
-          const idx = this.queue.findIndex(item => item.resolve === resolve);
+          const idx = this.queue.indexOf(entry);
           if (idx !== -1) {
             this.queue.splice(idx, 1);
             const err = new Error('Semaphore acquisition timed out waiting in queue');
@@ -102,14 +111,7 @@ export class Semaphore {
         }, timeoutMs);
       }
 
-      this.queue.push({
-        resolve: () => {
-          if (timer) clearTimeout(timer);
-          this.activeCount++;
-          resolve();
-        },
-        reject
-      });
+      this.queue.push(entry);
     });
   }
 
@@ -214,7 +216,12 @@ export async function executeWithResilience(fn, options = {}) {
   }
 
   // 2. Concurrency limiter guard
-  await semaphore.acquire(options.acquireTimeoutMs || 30000);
+  try {
+    await semaphore.acquire(options.acquireTimeoutMs || 30000);
+  } catch (err) {
+    breaker.recordFailure(false);
+    throw err;
+  }
 
   try {
     retryHandler.stats.totalCalls++;
@@ -237,7 +244,7 @@ export async function executeWithResilience(fn, options = {}) {
 
         // If not transient or retries exhausted
         if (!isTransient || attempts > maxRetries) {
-          breaker.recordFailure(true);
+          breaker.recordFailure(isTransient);
           if (attempts > 1) {
             retryHandler.stats.exhaustedRetries++;
           }
@@ -256,12 +263,10 @@ export async function executeWithResilience(fn, options = {}) {
         retryHandler.stats.totalRetries++;
         const headerVal = error.headers?.get?.('retry-after') || error.retryAfter;
         const retryAfterMs = parseRetryAfter(headerVal);
-        const backoffMs = retryAfterMs !== null
+        const calculatedBackoffMs = retryAfterMs !== null
           ? retryAfterMs
-          : Math.min(
-              retryHandler.maxDelayMs,
-              retryHandler.baseDelayMs * Math.pow(2, attempts - 1) + Math.random() * 150
-            );
+          : (retryHandler.baseDelayMs * Math.pow(2, attempts - 1) + Math.random() * 150);
+        const backoffMs = Math.min(calculatedBackoffMs, retryHandler.maxDelayMs);
 
         if (options.onRetry) {
           options.onRetry({ attempt: attempts, backoffMs, error });

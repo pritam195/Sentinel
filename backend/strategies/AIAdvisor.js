@@ -169,19 +169,6 @@ class AIAdvisor extends CommerceAdvisor {
     let wasClamped = false;
     const clampReasons = [];
 
-    // Margin floor from costPrice
-    if (product.costPrice != null && product.costPrice > 0) {
-      const minMargin = product.minMarginPercent != null
-        ? (product.minMarginPercent > 1 ? product.minMarginPercent / 100 : product.minMarginPercent)
-        : 0;
-      const marginFloor = Math.round(product.costPrice * (1 + minMargin) * 100) / 100;
-      if (clampedPrice < marginFloor) {
-        clampedPrice = marginFloor;
-        wasClamped = true;
-        clampReasons.push(`clamped to margin floor of $${marginFloor.toFixed(2)}`);
-      }
-    }
-
     // maxSingleChangePercent
     const maxPercent = options.maxSingleChangePercent ?? this.maxSingleChangePercent ?? 20;
     const maxDelta = product.currentPrice * (maxPercent / 100);
@@ -196,6 +183,19 @@ class AIAdvisor extends CommerceAdvisor {
       clampedPrice = minAllowed;
       wasClamped = true;
       clampReasons.push(`clamped to max single change limit of -${maxPercent}%`);
+    }
+
+    // Margin floor from costPrice takes precedence over downwards volatility limits
+    if (product.costPrice != null && product.costPrice > 0) {
+      const minMargin = product.minMarginPercent != null
+        ? (product.minMarginPercent > 1 ? product.minMarginPercent / 100 : product.minMarginPercent)
+        : 0;
+      const marginFloor = Math.round(product.costPrice * (1 + minMargin) * 100) / 100;
+      if (clampedPrice < marginFloor) {
+        clampedPrice = marginFloor;
+        wasClamped = true;
+        clampReasons.push(`clamped to margin floor of $${marginFloor.toFixed(2)}`);
+      }
     }
 
     const cleanReasoning = value.reasoning.trim().replace(/^\[AI Analysis\]\s*/i, '');

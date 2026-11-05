@@ -1,13 +1,26 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" class="dark">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Sentinel</title>
-    <script type="module" src="/src/main.jsx"></script>
+    <title>Sentinel — Autonomous Commerce Decision Desk</title>
+    
+    <!-- Meta SEO & Open Graph Tags -->
+    <meta name="description" content="Autonomous inventory and dynamic pricing engine treating AI as advisory proposals bounded by 3-stage commercial guardrails and human review." />
+    <meta property="og:title" content="Sentinel — Autonomous Commerce Decision Desk" />
+    <meta property="og:description" content="AI should be fast to propose, but slow to trust. High-velocity merchandiser review desk with deterministic guardrails." />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="/favicon.svg" />
+    <meta name="theme-color" content="#090d16" />
+
+    <!-- Typography Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   </head>
-  <body>
+  <body class="bg-[var(--bg-base)] text-[var(--text-primary)] antialiased selection:bg-cyan-500/20 selection:text-cyan-300">
     <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

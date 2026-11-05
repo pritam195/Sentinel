@@ -23,7 +23,7 @@ export const ROLES = {
  */
 export function signToken(payload, options = {}) {
   const expiresIn = options.expiresIn || '1h';
-  return jwt.sign(payload, JWT_SECRET, { expiresIn });
+  return jwt.sign(payload, JWT_SECRET, { expiresIn, algorithm: 'HS256' });
 }
 
 /**
@@ -37,7 +37,7 @@ export function authenticateJWT(req, res, next) {
     return res.status(401).json({ error: 'Unauthorized: Authentication token is required' });
   }
 
-  jwt.verify(token, JWT_SECRET, (err, decoded) => {
+  jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] }, (err, decoded) => {
     if (err) {
       if (err.name === 'TokenExpiredError') {
         return res.status(401).json({ error: 'Unauthorized: Token has expired' });
