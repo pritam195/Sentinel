@@ -90,9 +90,18 @@ export class Semaphore {
 
     return new Promise((resolve, reject) => {
       let timer = null;
+      const entry = {
+        resolve: () => {
+          if (timer) clearTimeout(timer);
+          this.activeCount++;
+          resolve();
+        },
+        reject
+      };
+
       if (timeoutMs > 0) {
         timer = setTimeout(() => {
-          const idx = this.queue.findIndex(item => item.resolve === resolve);
+          const idx = this.queue.indexOf(entry);
           if (idx !== -1) {
             this.queue.splice(idx, 1);
             const err = new Error('Semaphore acquisition timed out waiting in queue');
@@ -102,14 +111,7 @@ export class Semaphore {
         }, timeoutMs);
       }
 
-      this.queue.push({
-        resolve: () => {
-          if (timer) clearTimeout(timer);
-          this.activeCount++;
-          resolve();
-        },
-        reject
-      });
+      this.queue.push(entry);
     });
   }
 
