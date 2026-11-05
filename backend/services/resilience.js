@@ -244,7 +244,7 @@ export async function executeWithResilience(fn, options = {}) {
 
         // If not transient or retries exhausted
         if (!isTransient || attempts > maxRetries) {
-          breaker.recordFailure(true);
+          breaker.recordFailure(isTransient);
           if (attempts > 1) {
             retryHandler.stats.exhaustedRetries++;
           }
@@ -263,12 +263,10 @@ export async function executeWithResilience(fn, options = {}) {
         retryHandler.stats.totalRetries++;
         const headerVal = error.headers?.get?.('retry-after') || error.retryAfter;
         const retryAfterMs = parseRetryAfter(headerVal);
-        const backoffMs = retryAfterMs !== null
+        const calculatedBackoffMs = retryAfterMs !== null
           ? retryAfterMs
-          : Math.min(
-              retryHandler.maxDelayMs,
-              retryHandler.baseDelayMs * Math.pow(2, attempts - 1) + Math.random() * 150
-            );
+          : (retryHandler.baseDelayMs * Math.pow(2, attempts - 1) + Math.random() * 150);
+        const backoffMs = Math.min(calculatedBackoffMs, retryHandler.maxDelayMs);
 
         if (options.onRetry) {
           options.onRetry({ attempt: attempts, backoffMs, error });
