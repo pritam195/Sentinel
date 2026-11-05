@@ -35,7 +35,7 @@ export function SuggestionListItem({ suggestion, type = 'pricing', isSelected, o
       onClick={onSelect}
       className={`p-3.5 rounded-xl border transition-all cursor-pointer select-none relative ${
         isSelected
-          ? 'bg-[var(--bg-elevated)] border-[var(--accent-primary)] shadow-md shadow-cyan-500/5'
+          ? 'bg-[var(--bg-elevated)] border-[var(--accent-primary)] shadow-md shadow-sky-500/10 dark:shadow-cyan-500/5'
           : 'bg-[var(--bg-surface)] border-[var(--border-subtle)] hover:border-[var(--border-active)] hover:bg-[var(--bg-hover)]'
       }`}
     >
@@ -48,10 +48,10 @@ export function SuggestionListItem({ suggestion, type = 'pricing', isSelected, o
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
           <div
-            className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 ${
+            className={`w-6 h-6 rounded-md flex items-center justify-center shrink-0 border ${
               isPricing
-                ? 'bg-cyan-950/60 text-cyan-400 border border-cyan-800/40'
-                : 'bg-indigo-950/60 text-indigo-400 border border-indigo-800/40'
+                ? 'bg-cyan-50 text-cyan-700 border-cyan-200 dark:bg-cyan-950/60 dark:text-cyan-400 dark:border-cyan-800/40'
+                : 'bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/60 dark:text-indigo-400 dark:border-indigo-800/40'
             }`}
           >
             {isPricing ? <DollarSign className="w-3.5 h-3.5" /> : <Package className="w-3.5 h-3.5" />}
@@ -80,12 +80,12 @@ export function SuggestionListItem({ suggestion, type = 'pricing', isSelected, o
         <div className="flex items-center gap-1 font-mono-numbers text-xs font-semibold">
           {isPricing && (
             <span
-              className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[11px] ${
+              className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[11px] font-semibold border ${
                 isNeutral
-                  ? 'bg-zinc-800 text-zinc-400'
+                  ? 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700'
                   : isPositive
-                  ? 'bg-emerald-950/70 text-emerald-400 border border-emerald-800/30'
-                  : 'bg-rose-950/70 text-rose-400 border border-rose-800/30'
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/70 dark:text-emerald-400 dark:border-emerald-800/30'
+                  : 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/70 dark:text-rose-400 dark:border-rose-800/30'
               }`}
             >
               {isNeutral ? <Minus className="w-3 h-3" /> : isPositive ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
@@ -94,7 +94,7 @@ export function SuggestionListItem({ suggestion, type = 'pricing', isSelected, o
           )}
 
           {!isPricing && (
-            <span className="px-1.5 py-0.5 rounded text-[11px] bg-indigo-950/70 text-indigo-300 border border-indigo-800/30">
+            <span className="px-1.5 py-0.5 rounded text-[11px] font-semibold border bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-950/70 dark:text-indigo-300 dark:border-indigo-800/30">
               {deltaText} order
             </span>
           )}
@@ -110,8 +110,8 @@ export function SuggestionListItem({ suggestion, type = 'pricing', isSelected, o
         )}
 
         {suggestion.wasClamped && (
-          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-mono-numbers bg-amber-950/60 text-amber-300 border border-amber-800/30 font-semibold">
-            <ShieldAlert className="w-3 h-3" /> CLAMPED
+          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-mono-numbers bg-amber-50 text-amber-800 border border-amber-200 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-800/30 font-semibold">
+            <ShieldAlert className="w-3 h-3 text-amber-600 dark:text-amber-400" /> CLAMPED
           </span>
         )}
 

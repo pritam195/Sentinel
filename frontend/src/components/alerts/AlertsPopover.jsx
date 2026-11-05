@@ -46,7 +46,7 @@ export function AlertsPopover({ pricingSuggestions = [], reorderSuggestions = []
               <span className="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
                 Active System Triggers
               </span>
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-mono-numbers bg-[var(--bg-elevated)] text-[var(--text-muted)]">
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-mono-numbers bg-[var(--bg-elevated)] text-[var(--text-muted)] border border-[var(--border-subtle)]">
                 {totalCount}
               </span>
             </div>
@@ -68,7 +68,7 @@ export function AlertsPopover({ pricingSuggestions = [], reorderSuggestions = []
               className="p-2.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] transition-colors cursor-pointer flex items-center justify-between"
             >
               <div className="flex items-center gap-2.5">
-                <div className="p-1.5 rounded bg-rose-950/60 text-rose-400">
+                <div className="p-1.5 rounded bg-rose-100 text-rose-700 dark:bg-rose-950/60 dark:text-rose-400">
                   <AlertTriangle className="w-3.5 h-3.5" />
                 </div>
                 <div>
@@ -76,7 +76,7 @@ export function AlertsPopover({ pricingSuggestions = [], reorderSuggestions = []
                   <div className="text-[10px] text-[var(--text-muted)]">Inventory below threshold</div>
                 </div>
               </div>
-              <span className="px-2 py-0.5 rounded text-xs font-mono-numbers font-semibold bg-rose-950/80 text-rose-300 border border-rose-800/40">
+              <span className="px-2 py-0.5 rounded text-xs font-mono-numbers font-semibold bg-rose-100 text-rose-700 border border-rose-200 dark:bg-rose-950/80 dark:text-rose-300 dark:border-rose-800/40">
                 {lowStockCount}
               </span>
             </div>
@@ -90,7 +90,7 @@ export function AlertsPopover({ pricingSuggestions = [], reorderSuggestions = []
               className="p-2.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] transition-colors cursor-pointer flex items-center justify-between"
             >
               <div className="flex items-center gap-2.5">
-                <div className="p-1.5 rounded bg-cyan-950/60 text-cyan-400">
+                <div className="p-1.5 rounded bg-sky-100 text-sky-700 dark:bg-cyan-950/60 dark:text-cyan-400">
                   <TrendingUp className="w-3.5 h-3.5" />
                 </div>
                 <div>
@@ -98,7 +98,7 @@ export function AlertsPopover({ pricingSuggestions = [], reorderSuggestions = []
                   <div className="text-[10px] text-[var(--text-muted)]">Velocity exceeding category baseline</div>
                 </div>
               </div>
-              <span className="px-2 py-0.5 rounded text-xs font-mono-numbers font-semibold bg-cyan-950/80 text-cyan-300 border border-cyan-800/40">
+              <span className="px-2 py-0.5 rounded text-xs font-mono-numbers font-semibold bg-sky-100 text-sky-700 border border-sky-200 dark:bg-cyan-950/80 dark:text-cyan-300 dark:border-cyan-800/40">
                 {demandSpikeCount}
               </span>
             </div>
@@ -113,7 +113,7 @@ export function AlertsPopover({ pricingSuggestions = [], reorderSuggestions = []
                 className="p-2.5 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] transition-colors cursor-pointer flex items-center justify-between"
               >
                 <div className="flex items-center gap-2.5">
-                  <div className="p-1.5 rounded bg-indigo-950/60 text-indigo-400">
+                  <div className="p-1.5 rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-400">
                     <Sparkles className="w-3.5 h-3.5" />
                   </div>
                   <div>
@@ -121,7 +121,7 @@ export function AlertsPopover({ pricingSuggestions = [], reorderSuggestions = []
                     <div className="text-[10px] text-[var(--text-muted)]">On-demand merchandiser triggers</div>
                   </div>
                 </div>
-                <span className="px-2 py-0.5 rounded text-xs font-mono-numbers font-semibold bg-indigo-950/80 text-indigo-300 border border-indigo-800/40">
+                <span className="px-2 py-0.5 rounded text-xs font-mono-numbers font-semibold bg-indigo-100 text-indigo-700 border border-indigo-200 dark:bg-indigo-950/80 dark:text-indigo-300 dark:border-indigo-800/40">
                   {manualCount}
                 </span>
               </div>

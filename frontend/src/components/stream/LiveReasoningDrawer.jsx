@@ -128,7 +128,7 @@ export function LiveReasoningDrawer({
             {isStreaming && onStop && (
               <button
                 onClick={onStop}
-                className="px-3 py-1.5 rounded-lg border border-rose-500/30 bg-rose-950/40 text-rose-300 text-xs font-medium cursor-pointer"
+                className="px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-500/30 dark:bg-rose-950/40 dark:text-rose-300 text-xs font-medium cursor-pointer"
               >
                 Abort Stream
               </button>
@@ -146,3 +146,4 @@ export function LiveReasoningDrawer({
     </Drawer>
   );
 }
+

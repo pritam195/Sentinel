@@ -52,9 +52,9 @@ export function TopBar({
           onClick={isAdmin ? onOpenStrategyModal : undefined}
           className={`hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs font-mono-numbers transition-all ${
             strategy === 'ai'
-              ? 'border-cyan-800/40 bg-cyan-950/40 text-cyan-300'
-              : 'border-zinc-700 bg-zinc-800/60 text-zinc-300'
-          } ${isAdmin ? 'cursor-pointer hover:border-cyan-500/60' : 'cursor-default'}`}
+              ? 'border-sky-200 bg-sky-50 text-sky-800 dark:border-cyan-800/40 dark:bg-cyan-950/40 dark:text-cyan-300'
+              : 'border-slate-200 bg-slate-100 text-slate-700 dark:border-zinc-700 dark:bg-zinc-800/60 dark:text-zinc-300'
+          } ${isAdmin ? 'cursor-pointer hover:border-[var(--accent-primary)]' : 'cursor-default'}`}
           title={isAdmin ? 'Click to change advisor engine (Admin)' : 'Active recommendation engine'}
         >
           <Cpu className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
@@ -71,9 +71,9 @@ export function TopBar({
 
       {/* Middle Area: Persistent Breaker / Quota Banner if OPEN or HALF_OPEN */}
       {isRateLimited && (
-        <div className="hidden lg:flex items-center gap-2 px-3 py-1 rounded-full border border-amber-600/40 bg-amber-950/50 text-amber-200 text-xs animate-pulse">
-          <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-          <span className="font-medium">
+        <div className="hidden lg:flex items-center gap-2 px-3 py-1 rounded-full border border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-600/40 dark:bg-amber-950/50 dark:text-amber-200 text-xs animate-pulse font-medium">
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+          <span>
             Running on rule engine (LLM quota reached / circuit breaker {breakerState})
           </span>
         </div>
@@ -138,3 +138,4 @@ export function TopBar({
     </header>
   );
 }
+

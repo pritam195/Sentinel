@@ -146,10 +146,10 @@ export function CatalogDesk({
               </button>
               <button
                 onClick={() => onOpenLiveStream?.(p)}
-                className="p-1 rounded-md border border-cyan-800/40 bg-cyan-950/40 text-cyan-300 hover:bg-cyan-900/40 transition-colors cursor-pointer"
+                className="p-1 rounded-md border border-sky-200 bg-sky-50 text-sky-800 hover:bg-sky-100 dark:border-cyan-800/40 dark:bg-cyan-950/40 dark:text-cyan-300 dark:hover:bg-cyan-900/40 transition-colors cursor-pointer"
                 title="Stream AI Reasoning"
               >
-                <Radio className="w-3.5 h-3.5" />
+                <Radio className="w-3.5 h-3.5 text-sky-600 dark:text-cyan-400" />
               </button>
             </div>
           );
@@ -302,7 +302,7 @@ export function CatalogDesk({
                     }}
                     className={`transition-colors cursor-pointer ${
                       isHighlighted
-                        ? 'bg-emerald-950/40 text-emerald-200'
+                        ? 'bg-emerald-50 text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200'
                         : 'hover:bg-[var(--bg-hover)]'
                     }`}
                   >
@@ -359,3 +359,4 @@ export function CatalogDesk({
     </div>
   );
 }
+

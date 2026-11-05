@@ -41,3 +41,4 @@ export function StockHealthBar({ stockLevel = 0, reorderThreshold = 20 }) {
     </div>
   );
 }
+

@@ -162,7 +162,7 @@ export function NavRail({
                 isCollapsed ? 'justify-center p-2' : ''
               }`}
             >
-              <div className="w-7 h-7 rounded-lg bg-zinc-800 text-[var(--text-primary)] flex items-center justify-center font-bold text-xs shrink-0">
+              <div className="w-7 h-7 rounded-lg bg-slate-200 text-slate-800 dark:bg-zinc-800 dark:text-[var(--text-primary)] flex items-center justify-center font-bold text-xs shrink-0">
                 {user?.name ? user.name[0].toUpperCase() : 'U'}
               </div>
 
@@ -246,3 +246,4 @@ export function NavRail({
     </>
   );
 }
+

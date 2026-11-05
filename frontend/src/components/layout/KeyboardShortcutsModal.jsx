@@ -42,3 +42,4 @@ export function KeyboardShortcutsModal({ isOpen, onClose }) {
     </Modal>
   );
 }
+

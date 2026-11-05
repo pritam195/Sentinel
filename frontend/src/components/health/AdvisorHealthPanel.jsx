@@ -81,8 +81,8 @@ export function AdvisorHealthPanel() {
           <span className="text-xs font-semibold uppercase tracking-wider text-[var(--text-secondary)]">
             Upstream Circuit Breaker State Machine
           </span>
-          <span className="text-xs font-mono-numbers px-2.5 py-0.5 rounded-full font-bold bg-black/40 border border-[var(--border-subtle)]">
-            State: <strong className={breakerState === 'CLOSED' ? 'text-emerald-400' : breakerState === 'HALF_OPEN' ? 'text-amber-400' : 'text-rose-400'}>{breakerState}</strong>
+          <span className="text-xs font-mono-numbers px-2.5 py-0.5 rounded-full font-bold bg-slate-100 dark:bg-black/40 border border-[var(--border-subtle)]">
+            State: <strong className={breakerState === 'CLOSED' ? 'text-emerald-700 dark:text-emerald-400' : breakerState === 'HALF_OPEN' ? 'text-amber-700 dark:text-amber-400' : 'text-rose-700 dark:text-rose-400'}>{breakerState}</strong>
           </span>
         </div>
 
@@ -91,13 +91,13 @@ export function AdvisorHealthPanel() {
           <div
             className={`p-4 rounded-xl border transition-all ${
               breakerState === 'CLOSED'
-                ? 'border-emerald-500/50 bg-emerald-950/30 text-emerald-300 ring-2 ring-emerald-500/20'
+                ? 'border-emerald-300 bg-emerald-50 text-emerald-900 ring-2 ring-emerald-500/20 dark:border-emerald-500/50 dark:bg-emerald-950/30 dark:text-emerald-300'
                 : 'border-[var(--border-subtle)] bg-[var(--bg-surface)] opacity-50 text-[var(--text-muted)]'
             }`}
           >
             <div className="flex items-center justify-between">
               <span className="font-bold text-xs font-mono-numbers">CLOSED</span>
-              <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
             </div>
             <p className="text-[11px] mt-2 leading-relaxed">
               Normal operating state. All candidate proposals query the LLM gateway.
@@ -108,13 +108,13 @@ export function AdvisorHealthPanel() {
           <div
             className={`p-4 rounded-xl border transition-all ${
               breakerState === 'HALF_OPEN'
-                ? 'border-amber-500/50 bg-amber-950/30 text-amber-300 ring-2 ring-amber-500/20'
+                ? 'border-amber-300 bg-amber-50 text-amber-900 ring-2 ring-amber-500/20 dark:border-amber-500/50 dark:bg-amber-950/30 dark:text-amber-300'
                 : 'border-[var(--border-subtle)] bg-[var(--bg-surface)] opacity-50 text-[var(--text-muted)]'
             }`}
           >
             <div className="flex items-center justify-between">
               <span className="font-bold text-xs font-mono-numbers">HALF_OPEN</span>
-              <AlertTriangle className="w-4 h-4 text-amber-400" />
+              <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
             </div>
             <p className="text-[11px] mt-2 leading-relaxed">
               Cooldown window elapsed (10s). Admits single trial probe to test API recovery.
@@ -125,13 +125,13 @@ export function AdvisorHealthPanel() {
           <div
             className={`p-4 rounded-xl border transition-all ${
               breakerState === 'OPEN'
-                ? 'border-rose-500/50 bg-rose-950/30 text-rose-300 ring-2 ring-rose-500/20'
+                ? 'border-rose-300 bg-rose-50 text-rose-900 ring-2 ring-rose-500/20 dark:border-rose-500/50 dark:bg-rose-950/30 dark:text-rose-300'
                 : 'border-[var(--border-subtle)] bg-[var(--bg-surface)] opacity-50 text-[var(--text-muted)]'
             }`}
           >
             <div className="flex items-center justify-between">
               <span className="font-bold text-xs font-mono-numbers">OPEN (TRIPPED)</span>
-              <ShieldAlert className="w-4 h-4 text-rose-400" />
+              <ShieldAlert className="w-4 h-4 text-rose-600 dark:text-rose-400" />
             </div>
             <p className="text-[11px] mt-2 leading-relaxed">
               Fast-fails upstream calls in 0.06ms to protect quota; 100% routed to rule engine.
@@ -197,15 +197,15 @@ export function AdvisorHealthPanel() {
             </div>
             <div className="p-2 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-subtle)]">
               <span className="text-[10px] text-[var(--text-muted)] block">Retried</span>
-              <span className="text-sm font-bold text-amber-400">{retries.totalRetries ?? 0}</span>
+              <span className="text-sm font-bold text-amber-700 dark:text-amber-400">{retries.totalRetries ?? 0}</span>
             </div>
             <div className="p-2 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-subtle)]">
               <span className="text-[10px] text-[var(--text-muted)] block">Recovered</span>
-              <span className="text-sm font-bold text-emerald-400">{retries.successfulRetries ?? 0}</span>
+              <span className="text-sm font-bold text-emerald-700 dark:text-emerald-400">{retries.successfulRetries ?? 0}</span>
             </div>
             <div className="p-2 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-subtle)]">
               <span className="text-[10px] text-[var(--text-muted)] block">Exhausted</span>
-              <span className="text-sm font-bold text-rose-400">{retries.exhaustedRetries ?? 0}</span>
+              <span className="text-sm font-bold text-rose-700 dark:text-rose-400">{retries.exhaustedRetries ?? 0}</span>
             </div>
           </div>
         </div>
@@ -328,3 +328,4 @@ export function AdvisorHealthPanel() {
     </div>
   );
 }
+

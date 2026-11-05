@@ -70,22 +70,22 @@ export function LoginModal() {
 
               <div className="space-y-2 text-xs">
                 <div className="flex items-center gap-2 text-[var(--text-secondary)]">
-                  <span className="w-5 h-5 rounded bg-zinc-800 text-[10px] font-mono-numbers flex items-center justify-center shrink-0">1</span>
+                  <span className="w-5 h-5 rounded bg-slate-200 text-slate-800 dark:bg-zinc-800 dark:text-[10px] text-[10px] font-mono-numbers flex items-center justify-center shrink-0">1</span>
                   <span>Inventory / Demand Event</span>
                 </div>
-                <div className="ml-2.5 border-l border-zinc-700 h-2" />
+                <div className="ml-2.5 border-l border-[var(--border-subtle)] h-2" />
                 <div className="flex items-center gap-2 text-[var(--text-secondary)]">
-                  <span className="w-5 h-5 rounded bg-cyan-950 text-cyan-400 text-[10px] font-mono-numbers flex items-center justify-center shrink-0">2</span>
+                  <span className="w-5 h-5 rounded bg-cyan-100 text-cyan-800 dark:bg-cyan-950 dark:text-cyan-400 text-[10px] font-mono-numbers flex items-center justify-center shrink-0">2</span>
                   <span>Advisor Proposal (Rule or LLM)</span>
                 </div>
-                <div className="ml-2.5 border-l border-zinc-700 h-2" />
+                <div className="ml-2.5 border-l border-[var(--border-subtle)] h-2" />
                 <div className="flex items-center gap-2 text-[var(--text-secondary)]">
-                  <span className="w-5 h-5 rounded bg-amber-950 text-amber-400 text-[10px] font-mono-numbers flex items-center justify-center shrink-0">3</span>
+                  <span className="w-5 h-5 rounded bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-400 text-[10px] font-mono-numbers flex items-center justify-center shrink-0">3</span>
                   <span>3 Guardrails (Schema, Bounds, Policy)</span>
                 </div>
-                <div className="ml-2.5 border-l border-zinc-700 h-2" />
-                <div className="flex items-center gap-2 font-medium text-emerald-400">
-                  <span className="w-5 h-5 rounded bg-emerald-950 text-emerald-400 text-[10px] font-mono-numbers flex items-center justify-center shrink-0">4</span>
+                <div className="ml-2.5 border-l border-[var(--border-subtle)] h-2" />
+                <div className="flex items-center gap-2 font-medium text-emerald-700 dark:text-emerald-400">
+                  <span className="w-5 h-5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-400 text-[10px] font-mono-numbers flex items-center justify-center shrink-0">4</span>
                   <span>Merchandiser HITL Approval Queue</span>
                 </div>
               </div>
@@ -152,7 +152,7 @@ export function LoginModal() {
 
             {/* Error Banner */}
             {authError && (
-              <div className="mt-4 p-3 rounded-lg border border-rose-500/30 bg-rose-950/40 text-rose-300 text-xs flex items-center gap-2">
+              <div className="mt-4 p-3 rounded-lg border border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-500/30 dark:bg-rose-950/40 dark:text-rose-300 text-xs flex items-center gap-2">
                 <span className="shrink-0 font-bold">⚠️</span>
                 <span>{authError}</span>
               </div>
@@ -221,3 +221,4 @@ export function LoginModal() {
     </div>
   );
 }
+

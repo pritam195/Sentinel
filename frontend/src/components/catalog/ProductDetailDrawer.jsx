@@ -222,28 +222,28 @@ export function ProductDetailDrawer({
             <button
               onClick={() => handleAdjustStock(1)}
               disabled={actionLoading || !canReview}
-              className="py-2 px-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)] text-xs font-mono-numbers font-semibold text-emerald-400 transition-colors cursor-pointer disabled:opacity-50"
+              className="py-2 px-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)] text-xs font-mono-numbers font-semibold text-emerald-700 dark:text-emerald-400 transition-colors cursor-pointer disabled:opacity-50"
             >
               +1 Stock
             </button>
             <button
               onClick={() => handleAdjustStock(5)}
               disabled={actionLoading || !canReview}
-              className="py-2 px-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)] text-xs font-mono-numbers font-semibold text-emerald-400 transition-colors cursor-pointer disabled:opacity-50"
+              className="py-2 px-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)] text-xs font-mono-numbers font-semibold text-emerald-700 dark:text-emerald-400 transition-colors cursor-pointer disabled:opacity-50"
             >
               +5 Stock
             </button>
             <button
               onClick={() => handleAdjustStock(10)}
               disabled={actionLoading || !canReview}
-              className="py-2 px-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)] text-xs font-mono-numbers font-semibold text-emerald-400 transition-colors cursor-pointer disabled:opacity-50"
+              className="py-2 px-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)] text-xs font-mono-numbers font-semibold text-emerald-700 dark:text-emerald-400 transition-colors cursor-pointer disabled:opacity-50"
             >
               +10 Stock
             </button>
             <button
               onClick={() => handleAdjustStock(-1)}
               disabled={actionLoading || !canReview || product.stockLevel <= 0}
-              className="py-2 px-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)] text-xs font-mono-numbers font-semibold text-rose-400 transition-colors cursor-pointer disabled:opacity-50"
+              className="py-2 px-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)] text-xs font-mono-numbers font-semibold text-rose-700 dark:text-rose-400 transition-colors cursor-pointer disabled:opacity-50"
             >
               -1 Stock
             </button>
@@ -366,18 +366,18 @@ export function ProductDetailDrawer({
               onClose();
               onOpenLiveStream?.(product);
             }}
-            className="py-2.5 px-3 rounded-xl border border-cyan-800/40 bg-cyan-950/40 hover:bg-cyan-900/50 text-cyan-300 text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
+            className="py-2.5 px-3 rounded-xl border border-sky-200 bg-sky-50 hover:bg-sky-100 text-sky-800 dark:border-cyan-800/40 dark:bg-cyan-950/40 dark:hover:bg-cyan-900/50 dark:text-cyan-300 text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer"
           >
-            <Radio className="w-4 h-4 text-cyan-400 animate-pulse" />
+            <Radio className="w-4 h-4 text-sky-600 dark:text-cyan-400 animate-pulse" />
             <span>Stream AI Pricing</span>
           </button>
 
           <button
             onClick={handleSuggestReorder}
             disabled={actionLoading || !canReview}
-            className="py-2.5 px-3 rounded-xl border border-indigo-800/40 bg-indigo-950/40 hover:bg-indigo-900/50 text-indigo-300 text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
+            className="py-2.5 px-3 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 dark:border-indigo-800/40 dark:bg-indigo-950/40 dark:hover:bg-indigo-900/50 dark:text-indigo-300 text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
           >
-            <Package className="w-4 h-4 text-indigo-400" />
+            <Package className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
             <span>Propose Replenishment</span>
           </button>
         </div>
@@ -410,3 +410,4 @@ export function ProductDetailDrawer({
     </Drawer>
   );
 }
+

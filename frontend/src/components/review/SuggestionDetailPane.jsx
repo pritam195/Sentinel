@@ -108,10 +108,10 @@ export function SuggestionDetailPane({
             {onOpenLiveStream && (
               <button
                 onClick={() => onOpenLiveStream(product)}
-                className="px-2.5 py-1.5 rounded-lg border border-cyan-800/40 bg-cyan-950/40 hover:bg-cyan-900/50 text-cyan-300 text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                className="px-2.5 py-1.5 rounded-lg border border-sky-200 bg-sky-50 hover:bg-sky-100 text-sky-800 dark:border-cyan-800/40 dark:bg-cyan-950/40 dark:hover:bg-cyan-900/50 dark:text-cyan-300 text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
                 title="Inspect real-time LLM reasoning tokens via Server-Sent Events"
               >
-                <Radio className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+                <Radio className="w-3.5 h-3.5 text-sky-600 dark:text-cyan-400 animate-pulse" />
                 <span>Live Stream</span>
               </button>
             )}
@@ -149,12 +149,12 @@ export function SuggestionDetailPane({
               <ArrowRight className="w-5 h-5 text-[var(--accent-primary)] hidden sm:block" />
               {isPricing && (
                 <span
-                  className={`mt-1 text-xs font-mono-numbers font-bold px-2 py-0.5 rounded-full ${
+                  className={`mt-1 text-xs font-mono-numbers font-bold px-2 py-0.5 rounded-full border ${
                     Math.abs(deltaPct) < 0.001
-                      ? 'bg-zinc-800 text-zinc-400'
+                      ? 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-zinc-800 dark:text-zinc-400 dark:border-zinc-700'
                       : isPositive
-                      ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/40'
-                      : 'bg-rose-950 text-rose-400 border border-rose-800/40'
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-400 dark:border-emerald-800/40'
+                      : 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950 dark:text-rose-400 dark:border-rose-800/40'
                   }`}
                 >
                   {isPositive ? '+' : ''}{deltaPct.toFixed(1)}%
@@ -171,7 +171,7 @@ export function SuggestionDetailPane({
                 {isPricing ? `$${proposedVal?.toFixed(2)}` : `+${proposedVal} units`}
               </div>
               {isPricing && proposedMargin && (
-                <div className="text-[11px] font-mono-numbers text-emerald-400 mt-0.5">
+                <div className="text-[11px] font-mono-numbers text-emerald-700 dark:text-emerald-400 font-semibold mt-0.5">
                   Projected Margin: {proposedMargin}% GM
                 </div>
               )}
@@ -247,12 +247,12 @@ export function SuggestionDetailPane({
 
         {/* 6. Inline Conflict Notice (409 Staleness / 410 Expired) */}
         {(isStale || isExpired) && (
-          <div className="mt-5 p-4 rounded-xl border border-rose-500/30 bg-rose-950/30 text-xs space-y-2">
-            <div className="flex items-center gap-2 font-semibold text-rose-300">
-              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+          <div className="mt-5 p-4 rounded-xl border border-rose-200 bg-rose-50 text-rose-900 dark:border-rose-500/30 dark:bg-rose-950/30 dark:text-rose-200 text-xs space-y-2">
+            <div className="flex items-center gap-2 font-semibold text-rose-800 dark:text-rose-300">
+              <AlertTriangle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0" />
               <span>{isStale ? 'Proposal is STALE (409 Conflict)' : 'Proposal has EXPIRED (410 Gone)'}</span>
             </div>
-            <p className="text-[11px] text-rose-200/90 leading-relaxed">
+            <p className="text-[11px] text-rose-800 dark:text-rose-200/90 leading-relaxed">
               {isStale
                 ? 'Product price or stock drifted in the catalog after this recommendation was generated. The proposal cannot be applied in its current state.'
                 : 'This proposal exceeded its 24-hour time-to-live horizon and has been archived.'}
@@ -260,7 +260,7 @@ export function SuggestionDetailPane({
             {onRefresh && (
               <button
                 onClick={onRefresh}
-                className="mt-1 px-3 py-1.5 rounded-lg bg-rose-900/60 hover:bg-rose-900 border border-rose-700/50 text-white font-medium text-xs flex items-center gap-1.5 cursor-pointer"
+                className="mt-1 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white dark:bg-rose-900/60 dark:hover:bg-rose-900 dark:border-rose-700/50 font-medium text-xs flex items-center gap-1.5 cursor-pointer shadow-xs"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 <span>Refresh Queue</span>
@@ -286,12 +286,12 @@ export function SuggestionDetailPane({
                       setShowConfirmAccept(true);
                     }
                   }}
-                  className="flex-1 py-3 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs tracking-wide transition-all shadow-lg shadow-emerald-500/10 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                  className="flex-1 py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white dark:bg-emerald-500 dark:hover:bg-emerald-400 dark:text-black font-bold text-xs tracking-wide transition-all shadow-md shadow-emerald-500/10 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                   title={!canReview ? 'Merchandiser or Admin role required' : 'Accept and apply proposal (A)'}
                 >
                   <CheckCircle2 className="w-4 h-4" />
                   <span>Accept Proposal</span>
-                  <kbd className="hidden sm:inline px-1.5 py-0.5 rounded text-[10px] bg-black/20 font-mono-numbers">
+                  <kbd className="hidden sm:inline px-1.5 py-0.5 rounded text-[10px] bg-white/20 dark:bg-black/20 font-mono-numbers">
                     A
                   </kbd>
                 </button>
@@ -303,23 +303,23 @@ export function SuggestionDetailPane({
                     if (!canReview) openAuthModal();
                     else onReject(suggestion._id);
                   }}
-                  className="py-3 px-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-rose-400 text-xs font-semibold tracking-wide transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                  className="py-3 px-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-rose-600 dark:hover:text-rose-400 text-xs font-semibold tracking-wide transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
                   title="Dismiss proposal (R)"
                 >
                   <XCircle className="w-4 h-4" />
                   <span>Reject</span>
-                  <kbd className="hidden sm:inline px-1.5 py-0.5 rounded text-[10px] bg-[var(--bg-surface)] text-[var(--text-muted)] font-mono-numbers">
+                  <kbd className="hidden sm:inline px-1.5 py-0.5 rounded text-[10px] bg-[var(--bg-surface)] text-[var(--text-muted)] font-mono-numbers border border-[var(--border-subtle)]">
                     R
                   </kbd>
                 </button>
               </div>
             ) : (
               /* Confirmation Prompt */
-              <div className="p-3.5 rounded-xl border border-emerald-500/30 bg-emerald-950/40 animate-slide-up space-y-2.5">
-                <div className="text-xs font-semibold text-emerald-300">
+              <div className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-500/30 dark:bg-emerald-950/40 dark:text-emerald-300 animate-slide-up space-y-2.5">
+                <div className="text-xs font-semibold text-emerald-800 dark:text-emerald-300">
                   Confirm catalog update for {product.name}?
                 </div>
-                <p className="text-[11px] text-emerald-200/90 leading-relaxed font-sans">
+                <p className="text-[11px] text-emerald-800 dark:text-emerald-200/90 leading-relaxed font-sans">
                   {isPricing
                     ? `Mutating retail price from $${currentVal?.toFixed(2)} to $${proposedVal?.toFixed(2)}. Stamped with acting role '${role}'.`
                     : `Issuing replenishment order for +${proposedVal} units. Stamped with acting role '${role}'.`}
@@ -331,13 +331,13 @@ export function SuggestionDetailPane({
                       setShowConfirmAccept(false);
                     }}
                     disabled={actionLoading}
-                    className="flex-1 py-2 px-3 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-xs cursor-pointer disabled:opacity-50"
+                    className="flex-1 py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white dark:bg-emerald-500 dark:hover:bg-emerald-400 dark:text-black font-bold text-xs cursor-pointer disabled:opacity-50"
                   >
                     {actionLoading ? 'Applying...' : 'Yes, Confirm & Apply'}
                   </button>
                   <button
                     onClick={() => setShowConfirmAccept(false)}
-                    className="py-2 px-3 rounded-lg border border-emerald-800 text-emerald-300 hover:bg-emerald-900/40 text-xs font-medium cursor-pointer"
+                    className="py-2 px-3 rounded-lg border border-emerald-300 text-emerald-800 hover:bg-emerald-100 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-900/40 text-xs font-medium cursor-pointer"
                   >
                     Cancel
                   </button>

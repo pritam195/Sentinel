@@ -184,7 +184,7 @@ export function ReviewInbox({
             >
               <span>{tab.label}</span>
               {tab.id === 'PENDING' && (
-                <span className="ml-1.5 px-1.5 py-0.2 rounded-full font-mono-numbers text-[10px] bg-amber-950 text-amber-300 border border-amber-800/40">
+                <span className="ml-1.5 px-1.5 py-0.2 rounded-full font-mono-numbers text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200 dark:bg-amber-950 dark:text-amber-300 dark:border-amber-800/40">
                   {pricingSuggestions.length + reorderSuggestions.length}
                 </span>
               )}
@@ -239,11 +239,11 @@ export function ReviewInbox({
 
           {/* Active Trigger Tag Notice */}
           {activeTriggerFilter && (
-            <div className="flex items-center justify-between px-2.5 py-1 rounded-lg bg-cyan-950/40 border border-cyan-800/40 text-[11px] text-cyan-300">
+            <div className="flex items-center justify-between px-2.5 py-1 rounded-lg bg-sky-50 border border-sky-200 text-[11px] text-sky-800 dark:bg-cyan-950/40 dark:border-cyan-800/40 dark:text-cyan-300">
               <span>Filtering by trigger: <strong>{activeTriggerFilter}</strong></span>
               <button
                 onClick={onClearTriggerFilter}
-                className="text-cyan-400 hover:underline cursor-pointer"
+                className="text-sky-600 dark:text-cyan-400 hover:underline cursor-pointer font-medium"
               >
                 Clear
               </button>
@@ -319,3 +319,4 @@ export function ReviewInbox({
     </div>
   );
 }
+
