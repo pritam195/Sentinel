@@ -116,12 +116,20 @@ router.get('/advisor-health', async (req, res) => {
       }
     }
 
+    const groqKey = process.env.GROQ_API_KEY || process.env.GROK_API_KEY;
+    const fallbackProvider = {
+      name: 'Groq',
+      configured: Boolean(groqKey && groqKey !== 'your_groq_api_key_here'),
+      model: process.env.GROQ_MODEL || process.env.GROK_MODEL || 'openai/gpt-oss-120b'
+    };
+
     res.json({
       breakerState: breakerDetails.state,
       circuitBreaker: breakerDetails,
       concurrencyLimiter: limiterStats,
       retryStats,
-      fallbackCountsByReason
+      fallbackCountsByReason,
+      fallbackProvider
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
