@@ -31,6 +31,9 @@ router.post('/', async (req, res) => {
     if (product.stockLevel === 0) product.status = 'OUT_OF_STOCK';
     await product.save();
     await recordInventorySnapshot(product, 'CREATED');
+
+    inventoryEvents.emit('inventory:changed', product);
+
     res.status(201).json(product);
   } catch (error) {
     res.status(400).json({ error: error.message });

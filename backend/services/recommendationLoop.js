@@ -42,8 +42,8 @@ export async function processInventoryChange(product) {
 
   const triggers = [];
 
-  // Trigger A: Inventory Low
-  if (product.stockLevel < product.reorderThreshold) {
+  // Trigger A: Inventory Low or Out of Stock
+  if (product.stockLevel < product.reorderThreshold || product.stockLevel === 0 || product.status === 'OUT_OF_STOCK') {
     triggers.push('INVENTORY_LOW');
   }
 
@@ -60,41 +60,13 @@ export async function processInventoryChange(product) {
 
   if (triggers.length === 0) return; // Nothing to do
 
-  // Enforce max changes per product per 24h
+  // Enforce max pricing changes per product per 24h
   const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const changes24h = await PricingSuggestion.countDocuments({
     productId: product._id,
     createdAt: { $gte: since24h }
   });
-
-  if (changes24h >= maxChangesPer24h) {
-    console.log(`[AgentLoop] Max 24h changes limit reached (${changes24h}/${maxChangesPer24h}) for ${product.sku}. Skipping.`);
-    try {
-      await recordAICall({
-        productId: product._id,
-        sku: product.sku,
-        category: product.category,
-        triggerType: triggers[0],
-        callType: 'pricing',
-        outcome: 'rejected_by_policy',
-        latencyMs: 0,
-        fellBack: false,
-        fallbackReason: null,
-        inputDetails: {
-          currentPrice: product.currentPrice,
-          changes24h,
-          maxChangesPer24h
-        },
-        outputDetails: {
-          rejected: true,
-          reason: `Max 24h change quota of ${maxChangesPer24h} reached (${changes24h} changes in last 24h)`
-        }
-      });
-    } catch (e) {
-      console.error('[AgentLoop] Quota rejection log error:', e.message);
-    }
-    return;
-  }
+  const pricingQuotaReached = changes24h >= maxChangesPer24h;
 
   const strategy = await getActiveStrategy();
   const advisorName = config?.activeStrategy || 'rule-based';
@@ -147,77 +119,105 @@ export async function processInventoryChange(product) {
       const expiresAt = new Date(Date.now() + suggestionTtlHours * 60 * 60 * 1000);
 
       if (!existingPricing) {
-        const pSuggestion = await strategy.suggestPricing(product, categoryAverageVelocity, triggerReason, { maxSingleChangePercent });
-        
-        let recommendedPrice = pSuggestion.recommendedPrice;
-        let reasoning = pSuggestion.reasoning;
-        const rawRecommendedPrice = pSuggestion.rawRecommendedPrice ?? pSuggestion.rawPrice ?? recommendedPrice;
-        let wasClamped = Boolean(pSuggestion.wasClamped);
-        let clampReason = pSuggestion.clampReasons ? pSuggestion.clampReasons.join('; ') : (pSuggestion.clampReason || null);
-
-        // Fallback or external strategy additional clamp check if not already performed
-        if (!wasClamped) {
-          const maxDelta = product.currentPrice * (maxSingleChangePercent / 100);
-          const maxAllowed = Math.round((product.currentPrice + maxDelta) * 100) / 100;
-          const minAllowed = Math.round((product.currentPrice - maxDelta) * 100) / 100;
-
-          if (recommendedPrice > maxAllowed) {
-            recommendedPrice = maxAllowed;
-            wasClamped = true;
-            clampReason = `Clamped to max single change limit of +${maxSingleChangePercent}%`;
-            reasoning += ` [${clampReason}]`;
-          } else if (recommendedPrice < minAllowed) {
-            recommendedPrice = minAllowed;
-            wasClamped = true;
-            clampReason = `Clamped to max single change limit of -${maxSingleChangePercent}%`;
-            reasoning += ` [${clampReason}]`;
+        if (pricingQuotaReached) {
+          console.log(`[AgentLoop] Max 24h pricing changes limit reached (${changes24h}/${maxChangesPer24h}) for ${product.sku}. Skipping pricing suggestion.`);
+          try {
+            await recordAICall({
+              productId: product._id,
+              sku: product.sku,
+              category: product.category,
+              triggerType: triggerReason,
+              callType: 'pricing',
+              outcome: 'rejected_by_policy',
+              latencyMs: 0,
+              fellBack: false,
+              fallbackReason: null,
+              inputDetails: {
+                currentPrice: product.currentPrice,
+                changes24h,
+                maxChangesPer24h
+              },
+              outputDetails: {
+                rejected: true,
+                reason: `Max 24h change quota of ${maxChangesPer24h} reached (${changes24h} changes in last 24h)`
+              }
+            });
+          } catch (e) {
+            console.error('[AgentLoop] Quota rejection log error:', e.message);
           }
+        } else {
+          const pSuggestion = await strategy.suggestPricing(product, categoryAverageVelocity, triggerReason, { maxSingleChangePercent });
+        
+          let recommendedPrice = pSuggestion.recommendedPrice;
+          let reasoning = pSuggestion.reasoning;
+          const rawRecommendedPrice = pSuggestion.rawRecommendedPrice ?? pSuggestion.rawPrice ?? recommendedPrice;
+          let wasClamped = Boolean(pSuggestion.wasClamped);
+          let clampReason = pSuggestion.clampReasons ? pSuggestion.clampReasons.join('; ') : (pSuggestion.clampReason || null);
 
-          if (product.costPrice != null && product.costPrice > 0) {
-            const minMargin = product.minMarginPercent != null
-              ? (product.minMarginPercent > 1 ? product.minMarginPercent / 100 : product.minMarginPercent)
-              : 0;
-            const marginFloor = Math.round(product.costPrice * (1 + minMargin) * 100) / 100;
-            if (recommendedPrice < marginFloor) {
-              recommendedPrice = marginFloor;
+          // Fallback or external strategy additional clamp check if not already performed
+          if (!wasClamped) {
+            const maxDelta = product.currentPrice * (maxSingleChangePercent / 100);
+            const maxAllowed = Math.round((product.currentPrice + maxDelta) * 100) / 100;
+            const minAllowed = Math.round((product.currentPrice - maxDelta) * 100) / 100;
+
+            if (recommendedPrice > maxAllowed) {
+              recommendedPrice = maxAllowed;
               wasClamped = true;
-              clampReason = `clamped to margin floor of $${marginFloor.toFixed(2)}`;
+              clampReason = `Clamped to max single change limit of +${maxSingleChangePercent}%`;
+              reasoning += ` [${clampReason}]`;
+            } else if (recommendedPrice < minAllowed) {
+              recommendedPrice = minAllowed;
+              wasClamped = true;
+              clampReason = `Clamped to max single change limit of -${maxSingleChangePercent}%`;
               reasoning += ` [${clampReason}]`;
             }
+
+            if (product.costPrice != null && product.costPrice > 0) {
+              const minMargin = product.minMarginPercent != null
+                ? (product.minMarginPercent > 1 ? product.minMarginPercent / 100 : product.minMarginPercent)
+                : 0;
+              const marginFloor = Math.round(product.costPrice * (1 + minMargin) * 100) / 100;
+              if (recommendedPrice < marginFloor) {
+                recommendedPrice = marginFloor;
+                wasClamped = true;
+                clampReason = `clamped to margin floor of $${marginFloor.toFixed(2)}`;
+                reasoning += ` [${clampReason}]`;
+              }
+            }
           }
-        }
 
-        const outcome = pSuggestion.isFallback
-          ? 'FALLBACK'
-          : (wasClamped ? 'clamped_by_policy' : (pSuggestion.outcome || 'success'));
+          const outcome = pSuggestion.isFallback
+            ? 'FALLBACK'
+            : (wasClamped ? 'clamped_by_policy' : (pSuggestion.outcome || 'success'));
 
-        try {
-          await PricingSuggestion.create({
-            productId: product._id,
-            currentPrice: product.currentPrice,
-            recommendedPrice,
-            rawRecommendedPrice,
-            rawPrice: rawRecommendedPrice,
-            wasClamped,
-            clampReason,
-            outcome,
-            direction: pSuggestion.direction,
-            confidence: pSuggestion.confidence,
-            reasoning,
-            status: 'PENDING',
-            triggerReason,
-            isFallback: Boolean(pSuggestion.isFallback),
-            fallbackReason: pSuggestion.fallbackReason || null,
-            priceVersion: product.priceVersion || 1,
-            productVersion,
-            productUpdatedAt,
-            expiresAt
-          });
-        } catch (err) {
-          if (isDuplicateKeyError(err)) {
-            console.log(`[AgentLoop] Pricing suggestion already pending for ${product.sku} (${triggerReason}) (E11000). Skipping.`);
-          } else {
-            throw err;
+          try {
+            await PricingSuggestion.create({
+              productId: product._id,
+              currentPrice: product.currentPrice,
+              recommendedPrice,
+              rawRecommendedPrice,
+              rawPrice: rawRecommendedPrice,
+              wasClamped,
+              clampReason,
+              outcome,
+              direction: pSuggestion.direction,
+              confidence: pSuggestion.confidence,
+              reasoning,
+              status: 'PENDING',
+              triggerReason,
+              isFallback: Boolean(pSuggestion.isFallback),
+              fallbackReason: pSuggestion.fallbackReason || null,
+              priceVersion: product.priceVersion || 1,
+              productVersion,
+              productUpdatedAt,
+              expiresAt
+            });
+          } catch (err) {
+            if (isDuplicateKeyError(err)) {
+              console.log(`[AgentLoop] Pricing suggestion already pending for ${product.sku} (${triggerReason}) (E11000). Skipping.`);
+            } else {
+              throw err;
+            }
           }
         }
       }
@@ -312,7 +312,7 @@ export async function runReconciliationSweep(options = {}) {
 
   for (const product of products) {
     const holds = [];
-    if (product.stockLevel < product.reorderThreshold) {
+    if (product.stockLevel < product.reorderThreshold || product.stockLevel === 0 || product.status === 'OUT_OF_STOCK') {
       holds.push('INVENTORY_LOW');
     }
 
