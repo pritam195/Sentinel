@@ -36,6 +36,21 @@ app.use(cors());
 app.use(express.json());
 app.use(morgan('dev'));
 
+// Health & Diagnostics Endpoint
+let lastMongoError = null;
+
+app.get('/health', (req, res) => {
+  const uri = process.env.MONGO_URI || process.env.MONGODB_URI || '';
+  const maskedUri = uri ? uri.replace(/:([^@]+)@/, ':****@') : 'NONE (Using localhost)';
+  res.json({
+    status: mongoose.connection.readyState === 1 ? 'ok' : 'error',
+    mongoState: ['disconnected', 'connected', 'connecting', 'disconnecting'][mongoose.connection.readyState] || 'unknown',
+    mongoUriConfigured: Boolean(uri),
+    mongoUriMasked: maskedUri,
+    lastMongoError: lastMongoError || null,
+  });
+});
+
 // Routes
 app.use('/auth', authRoutes);
 app.use('/products', productRoutes);
@@ -43,9 +58,11 @@ app.use('/', suggestionRoutes);
 app.use('/config', configRoutes);
 
 // MongoDB Connection
-mongoose.connect(process.env.MONGO_URI || process.env.MONGODB_URI || 'mongodb://localhost:27017/sentinel')
+const targetMongoUri = process.env.MONGO_URI || process.env.MONGODB_URI || 'mongodb://localhost:27017/sentinel';
+mongoose.connect(targetMongoUri)
   .then(async () => {
     console.log('Connected to MongoDB');
+    lastMongoError = null;
     try {
       await Promise.all([
         PricingSuggestion.syncIndexes(),
@@ -66,7 +83,10 @@ mongoose.connect(process.env.MONGO_URI || process.env.MONGODB_URI || 'mongodb://
       console.warn('Startup initialization warning:', e.message);
     }
   })
-  .catch(err => console.error('MongoDB connection error:', err));
+  .catch(err => {
+    lastMongoError = err.message || String(err);
+    console.error('MongoDB connection error:', err);
+  });
 
 // Start Server
 app.listen(PORT, () => {
