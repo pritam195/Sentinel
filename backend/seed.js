@@ -23,7 +23,7 @@ const seedProducts = [
 
 async function seed() {
   try {
-    await mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/sentinel');
+    await mongoose.connect(process.env.MONGO_URI || process.env.MONGODB_URI || 'mongodb://localhost:27017/sentinel');
     console.log('Connected to MongoDB for seeding...');
 
     await Product.deleteMany({});

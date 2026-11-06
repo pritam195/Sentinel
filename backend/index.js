@@ -43,7 +43,7 @@ app.use('/', suggestionRoutes);
 app.use('/config', configRoutes);
 
 // MongoDB Connection
-mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/sentinel')
+mongoose.connect(process.env.MONGO_URI || process.env.MONGODB_URI || 'mongodb://localhost:27017/sentinel')
   .then(async () => {
     console.log('Connected to MongoDB');
     try {
