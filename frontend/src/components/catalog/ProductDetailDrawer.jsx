@@ -221,28 +221,28 @@ export function ProductDetailDrawer({
           <div className="grid grid-cols-4 gap-2">
             <button
               onClick={() => handleAdjustStock(1)}
-              disabled={actionLoading || !canReview}
+              disabled={actionLoading}
               className="py-2 px-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)] text-xs font-mono-numbers font-semibold text-emerald-700 dark:text-emerald-400 transition-colors cursor-pointer disabled:opacity-50"
             >
               +1 Stock
             </button>
             <button
               onClick={() => handleAdjustStock(5)}
-              disabled={actionLoading || !canReview}
+              disabled={actionLoading}
               className="py-2 px-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)] text-xs font-mono-numbers font-semibold text-emerald-700 dark:text-emerald-400 transition-colors cursor-pointer disabled:opacity-50"
             >
               +5 Stock
             </button>
             <button
               onClick={() => handleAdjustStock(10)}
-              disabled={actionLoading || !canReview}
+              disabled={actionLoading}
               className="py-2 px-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)] text-xs font-mono-numbers font-semibold text-emerald-700 dark:text-emerald-400 transition-colors cursor-pointer disabled:opacity-50"
             >
               +10 Stock
             </button>
             <button
               onClick={() => handleAdjustStock(-1)}
-              disabled={actionLoading || !canReview || product.stockLevel <= 0}
+              disabled={actionLoading || (canReview && product.stockLevel <= 0)}
               className="py-2 px-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)] text-xs font-mono-numbers font-semibold text-rose-700 dark:text-rose-400 transition-colors cursor-pointer disabled:opacity-50"
             >
               -1 Stock
@@ -261,7 +261,7 @@ export function ProductDetailDrawer({
             />
             <button
               type="submit"
-              disabled={actionLoading || !targetStock || !canReview}
+              disabled={actionLoading || (canReview && !targetStock)}
               className="px-3 py-1.5 rounded-lg bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)] border border-[var(--border-subtle)] text-xs font-medium cursor-pointer disabled:opacity-50"
             >
               Set Level
@@ -352,7 +352,7 @@ export function ProductDetailDrawer({
 
           <button
             type="submit"
-            disabled={actionLoading || (!editPrice && !editCost) || !canReview}
+            disabled={actionLoading || (canReview && !editPrice && !editCost)}
             className="w-full py-2 rounded-lg bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)] border border-[var(--border-subtle)] text-xs font-semibold text-[var(--text-primary)] cursor-pointer disabled:opacity-50"
           >
             Apply Financial Revision
@@ -374,7 +374,7 @@ export function ProductDetailDrawer({
 
           <button
             onClick={handleSuggestReorder}
-            disabled={actionLoading || !canReview}
+            disabled={actionLoading}
             className="py-2.5 px-3 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 dark:border-indigo-800/40 dark:bg-indigo-950/40 dark:hover:bg-indigo-900/50 dark:text-indigo-300 text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer disabled:opacity-50"
           >
             <Package className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />

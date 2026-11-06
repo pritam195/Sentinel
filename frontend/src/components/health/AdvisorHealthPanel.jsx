@@ -2,12 +2,7 @@ import React, { useState } from 'react';
 import {
   Activity,
   ShieldAlert,
-  ShieldCheck,
-  Cpu,
-  Layers,
   RotateCcw,
-  Zap,
-  Clock,
   AlertTriangle,
   CheckCircle2,
   Lock,
@@ -17,9 +12,9 @@ import { useAuth } from '../../context/AuthContext';
 import { Modal } from '../common/Modal';
 
 export function AdvisorHealthPanel() {
-  const { health, loading, refresh, breakerState } = useAdvisorHealth();
+  const { health, refresh, breakerState } = useAdvisorHealth();
   const { config, updateStrategy } = useStrategyConfig();
-  const { isAdmin, openAuthModal, role } = useAuth();
+  const { isAdmin, openAuthModal } = useAuth();
 
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
   const [targetStrategy, setTargetStrategy] = useState('rule-based');

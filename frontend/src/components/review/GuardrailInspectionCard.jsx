@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldCheck, AlertTriangle, ArrowRight, ShieldAlert } from 'lucide-react';
+import { ShieldCheck, AlertTriangle, ShieldAlert } from 'lucide-react';
 
 const FALLBACK_REASON_MAP = {
   RATE_LIMITED: {

@@ -1,14 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  Inbox,
   Search,
-  Filter,
-  CheckCircle,
-  XCircle,
-  Clock,
-  Sparkles,
-  ArrowUpDown,
-  Layers,
   RefreshCw,
   CheckCheck,
 } from 'lucide-react';
@@ -35,7 +27,6 @@ export function ReviewInbox({
     pricingSuggestions,
     reorderSuggestions,
     loading,
-    error,
     actionInProgress,
     refresh,
     acceptPricing,

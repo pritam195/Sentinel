@@ -8,9 +8,7 @@ import {
   Moon,
   Sun,
   UserCheck,
-  X,
   ArrowRight,
-  ShieldAlert,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -18,7 +16,6 @@ import { useTheme } from '../../context/ThemeContext';
 export function CommandPalette({
   isOpen,
   onClose,
-  activeTab,
   setActiveTab,
   products = [],
   onSelectProduct,
@@ -28,7 +25,7 @@ export function CommandPalette({
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef(null);
-  const { quickLogin, role } = useAuth();
+  const { quickLogin } = useAuth();
   const { theme, toggleTheme } = useTheme();
 
   useEffect(() => {

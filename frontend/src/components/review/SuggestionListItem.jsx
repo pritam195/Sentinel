@@ -1,6 +1,6 @@
 import React from 'react';
 import { DollarSign, Package, TrendingUp, TrendingDown, Minus, ShieldAlert } from 'lucide-react';
-import { TriggerBadge, SourceBadge, StatusBadge } from '../common/Badge';
+import { TriggerBadge, StatusBadge } from '../common/Badge';
 
 export function SuggestionListItem({ suggestion, type = 'pricing', isSelected, onSelect }) {
   const isPricing = type === 'pricing';
@@ -70,10 +70,14 @@ export function SuggestionListItem({ suggestion, type = 'pricing', isSelected, o
       <div className="mt-2.5 flex items-baseline justify-between">
         <div className="flex items-baseline gap-2 font-mono-numbers">
           <span className="text-xs text-[var(--text-muted)] line-through">
-            {isPricing ? `$${suggestion.currentPrice?.toFixed(2)}` : `${suggestion.currentStock} units`}
+            {isPricing
+              ? `$${(suggestion.currentPrice ?? product.currentPrice ?? 0).toFixed(2)}`
+              : `${suggestion.currentStock ?? product.stockLevel ?? 0} units`}
           </span>
           <span className="text-sm font-bold text-[var(--text-primary)]">
-            {isPricing ? `$${suggestion.recommendedPrice?.toFixed(2)}` : `+${suggestion.recommendedQuantity} units`}
+            {isPricing
+              ? `$${(suggestion.recommendedPrice ?? 0).toFixed(2)}`
+              : `+${suggestion.recommendedQuantity ?? 0} units`}
           </span>
         </div>
 

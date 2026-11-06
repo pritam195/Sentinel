@@ -278,7 +278,7 @@ export function SuggestionDetailPane({
               <div className="flex items-center gap-3">
                 <button
                   type="button"
-                  disabled={actionLoading || !canReview}
+                  disabled={actionLoading}
                   onClick={() => {
                     if (!canReview) {
                       openAuthModal();
@@ -286,31 +286,39 @@ export function SuggestionDetailPane({
                       setShowConfirmAccept(true);
                     }
                   }}
-                  className="flex-1 py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white dark:bg-emerald-500 dark:hover:bg-emerald-400 dark:text-black font-bold text-xs tracking-wide transition-all shadow-md shadow-emerald-500/10 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-                  title={!canReview ? 'Merchandiser or Admin role required' : 'Accept and apply proposal (A)'}
+                  className={`flex-1 py-3 px-4 rounded-xl text-xs font-bold tracking-wide transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 ${
+                    canReview
+                      ? 'bg-emerald-600 hover:bg-emerald-500 text-white dark:bg-emerald-500 dark:hover:bg-emerald-400 dark:text-black shadow-emerald-500/10'
+                      : 'border border-[var(--border-subtle)] bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:border-[var(--accent-primary)] hover:text-[var(--text-primary)]'
+                  }`}
+                  title={!canReview ? 'Click to sign in as Merchandiser or Admin' : 'Accept and apply proposal (A)'}
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>Accept Proposal</span>
-                  <kbd className="hidden sm:inline px-1.5 py-0.5 rounded text-[10px] bg-white/20 dark:bg-black/20 font-mono-numbers">
-                    A
-                  </kbd>
+                  <span>{canReview ? 'Accept Proposal' : 'Sign in to Accept'}</span>
+                  {canReview && (
+                    <kbd className="hidden sm:inline px-1.5 py-0.5 rounded text-[10px] bg-white/20 dark:bg-black/20 font-mono-numbers">
+                      A
+                    </kbd>
+                  )}
                 </button>
 
                 <button
                   type="button"
-                  disabled={actionLoading || !canReview}
+                  disabled={actionLoading}
                   onClick={() => {
                     if (!canReview) openAuthModal();
                     else onReject(suggestion._id);
                   }}
                   className="py-3 px-4 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] hover:bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:text-rose-600 dark:hover:text-rose-400 text-xs font-semibold tracking-wide transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
-                  title="Dismiss proposal (R)"
+                  title={!canReview ? 'Click to sign in as Merchandiser or Admin' : 'Dismiss proposal (R)'}
                 >
                   <XCircle className="w-4 h-4" />
                   <span>Reject</span>
-                  <kbd className="hidden sm:inline px-1.5 py-0.5 rounded text-[10px] bg-[var(--bg-surface)] text-[var(--text-muted)] font-mono-numbers border border-[var(--border-subtle)]">
-                    R
-                  </kbd>
+                  {canReview && (
+                    <kbd className="hidden sm:inline px-1.5 py-0.5 rounded text-[10px] bg-[var(--bg-surface)] text-[var(--text-muted)] font-mono-numbers border border-[var(--border-subtle)]">
+                      R
+                    </kbd>
+                  )}
                 </button>
               </div>
             ) : (
